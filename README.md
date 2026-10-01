@@ -108,12 +108,6 @@ sudo pacman -S --needed python-pytest python-pytest-qt python-pytest-benchmark r
 The tests use a small fake Stellaris install in `tests/fixtures/`, never your
 own.
 
-## Licence
-
-[MIT](LICENSE). Cold Steel is inspired by
-[IronyModManager](https://github.com/bcssov/IronyModManager), which does the
-same job on Windows.
-
 ## Add a desktop icon
 
 To start Cold Steel from your desktop or app menu instead of a terminal, run
@@ -151,3 +145,10 @@ may ask whether to trust it. Choose **Allow launching**.
 
 If you move the `cold-steel` folder later, run the commands again from its
 new place.
+
+## Licence
+
+[MIT](LICENSE). 
+
+Cold Steel is inspired by
+[IronyModManager](https://github.com/bcssov/IronyModManager), which was the manager i used for years on Windows. Big props to Mario!
