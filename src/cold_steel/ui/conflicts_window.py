@@ -1,4 +1,8 @@
-"""Where a playset's mods clash: a list of conflicts, and each one side by side."""
+"""Where a playset's mods clash: a list of conflicts, and each one side by side.
+
+Each conflict can be settled here: pick the version that wins, write your own,
+or ignore it. The main window turns the choices into the patch mod.
+"""
 
 from collections.abc import Callable, Iterable
 
@@ -12,20 +16,26 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from cold_steel.core.compare import Pair, Version, compare
+from cold_steel.core.compare import TEXT_SUFFIXES, Pair, Version, compare, version_text
 from cold_steel.core.conflicts import FILE, Claim, Conflict, Found
 from cold_steel.core.index import GAME, Index
+from cold_steel.core.patch import check_own
+from cold_steel.core.resolve import CHOSEN, NONE, STALE, ResolutionBook, State, choices_digest
+from cold_steel.store.resolutions import Ignore
 from cold_steel.ui.tasks import Task, TaskRunner
 
 ITEM_ROLE = Qt.ItemDataRole.UserRole
@@ -66,6 +76,10 @@ class ConflictsWindow(QDialog):
     compared = Signal(object)
     # Search results are on screen. For tests.
     searched = Signal(object)
+    # The user pressed Generate patch mod.
+    generate_requested = Signal()
+    # The user's own version was checked: the problems found, if any. For tests.
+    own_checked = Signal(object)
 
     def __init__(self, tasks: TaskRunner, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -74,9 +88,14 @@ class ConflictsWindow(QDialog):
         self._tasks = tasks
         self._compare_task: Task | None = None
         self._search_task: Task | None = None
+        self._check_task: Task | None = None
         self.found: Found | None = None
         self.index: Index | None = None
         self.names: dict[str, str] = {}
+        self.choices: ResolutionBook | None = None
+        self.current: Conflict | None = None  # the conflict on screen
+        self.editing: Conflict | None = None  # the conflict the editor is for
+        self._by_key: dict[tuple[str, str], Conflict] = {}
 
         self.summary = QLabel(wordWrap=True)
         self.progress = QProgressBar(textVisible=False)
@@ -85,10 +104,20 @@ class ConflictsWindow(QDialog):
         refresh = QPushButton("Refresh")
         refresh.setToolTip("Find the conflicts again, after changing mods or the load order")
         refresh.clicked.connect(self.refresh_requested)
+        self.generate_button = QPushButton("Generate patch mod")
+        self.generate_button.setToolTip(
+            "Write your choices as a mod that loads last, so the game uses them"
+        )
+        self.generate_button.clicked.connect(self.generate_requested)
+        self.clear_all_button = QPushButton("Clear all choices…")
+        self.clear_all_button.clicked.connect(self.clear_all)
         top = QHBoxLayout()
         top.addWidget(self.summary, 1)
         top.addWidget(self.progress)
         top.addWidget(refresh)
+        top.addWidget(self.clear_all_button)
+        top.addWidget(self.generate_button)
+        self.patch_label = QLabel(wordWrap=True)
 
         self.search = QLineEdit(
             placeholderText="Find any object or file in this playset by name",
@@ -114,17 +143,25 @@ class ConflictsWindow(QDialog):
             "Objects and files only one mod changes. That's what mods are for, so these "
             "are hidden unless you ask."
         )
-        for box in (self.group_box, self.type_box, self.mod_box):
+        self.state_box = QComboBox()
+        self.state_box.addItem("Chosen or not", None)
+        self.state_box.addItem("No choice yet", NONE)
+        self.state_box.addItem("Chosen", CHOSEN)
+        self.state_box.addItem("Needs another look", STALE)
+        self.ignored_box = QCheckBox("Show ignored")
+        for box in (self.group_box, self.type_box, self.mod_box, self.state_box):
             box.currentIndexChanged.connect(self._fill_tree)
-        for check in (self.identical_box, self.game_box):
+        for check in (self.identical_box, self.game_box, self.ignored_box):
             check.toggled.connect(self._fill_tree)
         filters = QHBoxLayout()
         filters.addWidget(self.search, 1)
         filters.addWidget(self.group_box)
         filters.addWidget(self.type_box)
         filters.addWidget(self.mod_box)
+        filters.addWidget(self.state_box)
         filters.addWidget(self.identical_box)
         filters.addWidget(self.game_box)
+        filters.addWidget(self.ignored_box)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
@@ -160,6 +197,74 @@ class ConflictsWindow(QDialog):
         choose.addWidget(QLabel("Right:"))
         choose.addWidget(self.right_box, 1)
 
+        # Settling the conflict on screen.
+        self.choice = QLabel(wordWrap=True)
+        self.use_left = QPushButton("Use left")
+        self.use_left.setToolTip("Make the version on the left win")
+        self.use_left.clicked.connect(lambda: self._choose(self.left_box.currentData()))
+        self.use_right = QPushButton("Use right")
+        self.use_right.setToolTip("Make the version on the right win")
+        self.use_right.clicked.connect(lambda: self._choose(self.right_box.currentData()))
+        self.keep = QPushButton("Keep the winner")
+        self.keep.setToolTip("Keep the version that wins now, even if the load order changes")
+        self.keep.clicked.connect(
+            lambda: self._choose(self.current.winning if self.current else None)
+        )
+        self.own_button = QPushButton("Write my own…")
+        self.own_button.setToolTip("Write a version of your own, starting from the right one")
+        self.own_button.clicked.connect(self.start_own)
+        self.clear_button = QPushButton("Clear choice")
+        self.clear_button.clicked.connect(self.clear_choice)
+        self.ignore_button = QToolButton()
+        self.ignore_button.setText("Ignore")
+        self.ignore_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.ignore_button.setMenu(QMenu(self.ignore_button))
+        self.stop_ignoring_button = QPushButton("Stop ignoring")
+        self.stop_ignoring_button.clicked.connect(self.stop_ignoring)
+        actions = QHBoxLayout()
+        for button in (
+            self.use_left,
+            self.use_right,
+            self.keep,
+            self.own_button,
+            self.clear_button,
+            self.ignore_button,
+            self.stop_ignoring_button,
+        ):
+            actions.addWidget(button)
+        actions.addStretch(1)
+
+        # The merge editor: the user's own version, beside the two being compared.
+        self.editor_title = QLabel(wordWrap=True)
+        self.editor = QPlainTextEdit()
+        self.editor.setFont(self.viewer.right.font())
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.editor.setTabStopDistance(self.viewer.right.tabStopDistance())
+        self.editor_problems = QLabel(wordWrap=True)
+        self.editor_problems.setStyleSheet("color: #c0392b;")
+        self.editor_problems.hide()
+        save = QPushButton("Save my version")
+        save.clicked.connect(self.save_own)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.close_editor)
+        editor_buttons = QHBoxLayout()
+        editor_buttons.addStretch(1)
+        editor_buttons.addWidget(cancel)
+        editor_buttons.addWidget(save)
+        self.editor_panel = QWidget()
+        editor_layout = QVBoxLayout(self.editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.addWidget(self.editor_title)
+        editor_layout.addWidget(self.editor, 1)
+        editor_layout.addWidget(self.editor_problems)
+        editor_layout.addLayout(editor_buttons)
+        self.editor_panel.hide()
+        beside = QSplitter()
+        beside.addWidget(self.viewer)
+        beside.addWidget(self.editor_panel)
+        beside.setStretchFactor(0, 2)
+        beside.setStretchFactor(1, 1)
+
         detail = QWidget()
         detail_layout = QVBoxLayout(detail)
         detail_layout.setContentsMargins(0, 0, 0, 0)
@@ -167,8 +272,10 @@ class ConflictsWindow(QDialog):
         detail_layout.addWidget(self.reason)
         detail_layout.addWidget(self.rule)
         detail_layout.addLayout(choose)
+        detail_layout.addWidget(self.choice)
+        detail_layout.addLayout(actions)
         detail_layout.addWidget(self.same)
-        detail_layout.addWidget(self.viewer, 1)
+        detail_layout.addWidget(beside, 1)
 
         splitter = QSplitter()
         splitter.addWidget(self.tree)
@@ -178,6 +285,7 @@ class ConflictsWindow(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
+        layout.addWidget(self.patch_label)
         layout.addLayout(filters)
         layout.addWidget(splitter, 1)
         self._show_claims(None, (), "")
@@ -195,11 +303,23 @@ class ConflictsWindow(QDialog):
         self.summary.setText(text)
 
     def set_found(
-        self, found: Found, index: Index, names: dict[str, str], mod: str | None = None
+        self,
+        found: Found,
+        index: Index,
+        names: dict[str, str],
+        mod: str | None = None,
+        choices: ResolutionBook | None = None,
     ) -> None:
-        """Show a playset's conflicts. `mod` picks that mod in the mod filter."""
+        """Show a playset's conflicts, and the choices made for them. `mod` picks
+        that mod in the mod filter."""
         self.progress.hide()
-        self.found, self.index = found, index
+        self.found, self.index, self.choices = found, index, choices
+        self._by_key = {(c.kind, c.key): c for c in found.conflicts}
+        if self.editing is not None:
+            # The editor stays open, on the same conflict as found this time.
+            self.editing = self._by_key.get((self.editing.kind, self.editing.key))
+            if self.editing is None:
+                self.close_editor()
         self.names = {GAME: GAME_NAME, **names}
         between = [c for c in found.conflicts if len(c.mods) > 1]
         files = sum(c.kind == FILE for c in between)
@@ -226,6 +346,7 @@ class ConflictsWindow(QDialog):
             lambda k: self.names.get(k, k),
             current_mod,
         )
+        self._show_patch_state()
         self._fill_tree()
 
     @staticmethod
@@ -250,8 +371,10 @@ class ConflictsWindow(QDialog):
             return []
         kind = self.type_box.currentData()
         mod = self.mod_box.currentData()
+        state = self.state_box.currentData()
         identical = self.identical_box.isChecked()
         game = self.game_box.isChecked()
+        ignored = self.ignored_box.isChecked()
         return [
             c
             for c in self.found.conflicts
@@ -259,7 +382,14 @@ class ConflictsWindow(QDialog):
             and (game or len(c.mods) > 1)
             and (kind is None or c.kind == kind)
             and (mod is None or mod in c.mods)
+            and (state is None or self.state(c) == state)
+            and (ignored or self.choices is None or self.choices.ignored_by(c) is None)
         ]
+
+    def state(self, conflict: Conflict) -> State:
+        if self.choices is None or self.index is None:
+            return NONE
+        return self.choices.state(conflict, self.index)
 
     def _fill_tree(self) -> None:
         text = self.search.text().strip()
@@ -285,15 +415,45 @@ class ConflictsWindow(QDialog):
         return item
 
     def _conflict_item(self, parent: QTreeWidgetItem, conflict: Conflict) -> None:
-        winner = self.names.get(conflict.winning.layer, conflict.winning.layer)
-        item = QTreeWidgetItem(parent, [conflict.key, winner, str(len(conflict.mods))])
+        item = QTreeWidgetItem(parent, [conflict.key, "", str(len(conflict.mods))])
         item.setData(0, ITEM_ROLE, conflict)
+        self._label_item(item, conflict)
+
+    def _label_item(self, item: QTreeWidgetItem, conflict: Conflict) -> None:
+        """Show who wins: the user's choice if there is one, else the game's rule."""
+        state = self.state(conflict)
+        if state == CHOSEN:
+            item.setText(1, "✓ " + self._choice_name(conflict))
+            item.setToolTip(1, "Your choice. The patch mod makes it win.")
+        elif state == STALE:
+            item.setText(1, "⚠ Needs another look")
+            item.setToolTip(1, "A version changed after you chose. Look again, then choose.")
+        else:
+            item.setText(1, self.names.get(conflict.winning.layer, conflict.winning.layer))
+            item.setToolTip(1, conflict.reason)
         item.setToolTip(0, conflict.key)
-        item.setToolTip(1, conflict.reason)
-        if conflict.identical:
-            for col in range(3):
+        quiet = conflict.identical or (
+            self.choices is not None and self.choices.ignored_by(conflict) is not None
+        )
+        for col in range(3):
+            if quiet:
                 item.setForeground(col, QColor(Qt.GlobalColor.gray))
+            else:
+                # No colour of our own, so the theme's text colour shows. An empty
+                # QColor would be solid black, unreadable on a dark theme.
+                item.setData(col, Qt.ItemDataRole.ForegroundRole, None)
+        if conflict.identical:
             item.setToolTip(0, f"{conflict.key}\nIdentical: it doesn't matter which one wins.")
+        elif quiet:
+            item.setToolTip(0, f"{conflict.key}\nIgnored.")
+
+    def _choice_name(self, conflict: Conflict) -> str:
+        resolution = self.choices.get(conflict.kind, conflict.key) if self.choices else None
+        if resolution is None:
+            return ""
+        if resolution.own:
+            return "Your own version"
+        return self.names.get(resolution.layer, resolution.layer)
 
     def _fill_by_type(self) -> None:
         groups: dict[str, list[Conflict]] = {}
@@ -377,12 +537,7 @@ class ConflictsWindow(QDialog):
             self._show_claims(None, (), "")
 
     def _found_conflict(self, kind: str, key: str) -> Conflict | None:
-        if self.found is None:
-            return None
-        for conflict in self.found.conflicts:
-            if conflict.kind == kind and conflict.key == key:
-                return conflict
-        return None
+        return self._by_key.get((kind, key))
 
     def _show_conflict(self, conflict: Conflict) -> None:
         winner_name = self.names.get(conflict.winning.layer, conflict.winning.layer)
@@ -395,23 +550,15 @@ class ConflictsWindow(QDialog):
             reason,
             conflict.winner,
         )
-        rule = conflict.rule
-        if rule is None:
-            self.rule.setText("Whole files: the mod loaded last replaces the others.")
-            return
-        checked = (
-            f"checked in game on {rule.checked}" if rule.checked else "not yet checked in game"
-        )
-        if rule.folder:
-            where = f"Rule for {rule.folder}/"
-        else:
-            folder = conflict.winning.path.rpartition("/")[0]
-            where = f"{folder}/ has no rule of its own, so the default applies"
-        self.rule.setText(f"{where}: {rule.winner} wins. From {rule.source}, {checked}.")
+        self.current = conflict
+        self._show_choice()
+        self.rule.setText(_rule_text(conflict))
 
     def _show_claims(
         self, title: str | None, claims: tuple[Claim, ...], reason: str, winner: int = -1
     ) -> None:
+        self.current = None
+        self._show_choice()
         self.title.setText(title or "Choose a conflict to see each version")
         self.reason.setText(reason)
         self.rule.clear()
@@ -446,6 +593,213 @@ class ConflictsWindow(QDialog):
         task.succeeded.connect(lambda pair: self._compared(pair, task))
         task.failed.connect(lambda error: self.viewer.show_error(str(error)))
 
+    # Choosing
+
+    def _show_choice(self) -> None:
+        """The choice for the conflict on screen, and the buttons that change it."""
+        conflict, choices = self.current, self.choices
+        settled = conflict is not None and choices is not None and len(conflict.mods) > 0
+        for button in (self.use_left, self.use_right, self.keep, self.ignore_button):
+            button.setEnabled(settled)
+        self.own_button.setEnabled(settled and _editable(conflict))
+        if not settled or conflict is None or choices is None:
+            self.choice.clear()
+            self.clear_button.setEnabled(False)
+            self.stop_ignoring_button.hide()
+            self.ignore_button.show()
+            return
+        state = self.state(conflict)
+        self.clear_button.setEnabled(state != NONE)
+        if state == CHOSEN:
+            text = f"<b>Your choice:</b> {self._choice_name(conflict)}. The patch mod makes it win."
+        elif state == STALE:
+            text = (
+                f"<b>Needs another look.</b> You chose {self._choice_name(conflict)}, but a "
+                "version changed after that, so the patch mod leaves this out. Look again, "
+                "then choose."
+            )
+        else:
+            text = "No choice yet. The game uses the winner above."
+        ignored = choices.ignored_by(conflict)
+        if ignored is not None:
+            text += " " + _ignore_text(ignored, self.names)
+        self.choice.setText(text)
+        self.ignore_button.setVisible(ignored is None)
+        self.stop_ignoring_button.setVisible(ignored is not None)
+        self._fill_ignore_menu(conflict)
+
+    def _fill_ignore_menu(self, conflict: Conflict) -> None:
+        menu = self.ignore_button.menu()
+        menu.clear()
+        options = [
+            ("This conflict", Ignore(kind=conflict.kind, key=conflict.key)),
+            (f"Every conflict in {kind_label(conflict.kind)}", Ignore(kind=conflict.kind)),
+        ]
+        order = self.found.order if self.found else ()
+        mods = sorted(conflict.mods, key=lambda m: order.index(m) if m in order else len(order))
+        options += [(f"Every conflict with {self.names.get(m, m)}", Ignore(mod=m)) for m in mods]
+        for text, rule in options:
+            menu.addAction(text).triggered.connect(lambda _=False, r=rule: self.ignore(r))
+
+    def _choose(self, claim: Claim | None) -> None:
+        if claim is None or self.current is None or self.choices is None or self.index is None:
+            return
+        self.choices.choose(self.current, claim, self.index)
+        self._choice_changed()
+
+    def clear_choice(self) -> None:
+        if self.current is None or self.choices is None:
+            return
+        self.choices.clear(self.current.kind, self.current.key)
+        self._choice_changed()
+
+    def clear_all(self) -> None:
+        choices = self.choices
+        if choices is None or not choices.resolutions:
+            return
+        count = len(choices.resolutions)
+        if self.confirm(
+            "Clear all choices",
+            f"Clear all {count} choices for this playset? Generate the patch mod again "
+            "afterwards to take them out of the game too.",
+        ):
+            choices.clear_all()
+            self._relabel_all()
+            self._show_choice()
+            self._show_patch_state()
+
+    def ignore(self, rule: Ignore) -> None:
+        if self.choices is None:
+            return
+        self.choices.ignore(rule)
+        self._fill_tree()
+
+    def stop_ignoring(self) -> None:
+        if self.current is None or self.choices is None:
+            return
+        rule = self.choices.ignored_by(self.current)
+        if rule is not None:
+            self.choices.stop_ignoring(rule)
+            self._fill_tree()
+
+    def _choice_changed(self) -> None:
+        """Update what shows the choices, without rebuilding the list."""
+        item = self.tree.currentItem()
+        data = item.data(0, ITEM_ROLE) if item else None
+        if item is not None and isinstance(data, Conflict):
+            self._label_item(item, data)
+        else:
+            self._relabel_all()
+        self._show_choice()
+        self._show_patch_state()
+
+    def _relabel_all(self) -> None:
+        for n in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(n)
+            for r in range(group.childCount() if group else 0):
+                child = group.child(r) if group else None
+                data = child.data(0, ITEM_ROLE) if child else None
+                if child is not None and isinstance(data, Conflict):
+                    self._label_item(child, data)
+
+    def _show_patch_state(self) -> None:
+        choices = self.choices
+        self.generate_button.setEnabled(choices is not None)
+        self.clear_all_button.setEnabled(choices is not None and bool(choices.resolutions))
+        if choices is None:
+            self.patch_label.clear()
+            return
+        count = len(choices.resolutions)
+        if count == 0 and not choices.built:
+            self.patch_label.setText(
+                "Choose a winner for a conflict, then generate the patch mod so the game uses it."
+            )
+            return
+        if choices.built == choices_digest(choices.resolutions):
+            text = f"The patch mod is up to date with your {count} choice(s)."
+        elif choices.built:
+            text = "Your choices changed since the patch mod was made. Generate it again."
+        else:
+            text = f"{count} choice(s), not in the game yet. Generate the patch mod."
+        stale = sum(
+            self.state(c) == STALE
+            for r in choices.resolutions
+            if (c := self._by_key.get((r.kind, r.key))) is not None
+        )
+        if stale:
+            text += f" {stale} need another look, and are left out until you choose again."
+        self.patch_label.setText(text)
+
+    # Writing your own version
+
+    def start_own(self) -> None:
+        """Open the editor beside the versions, starting from the user's own
+        version if there is one, else from the version on the right."""
+        conflict = self.current
+        if conflict is None or not _editable(conflict):
+            return
+        self.editing = conflict
+        self.editor_title.setText(f"<b>Your version of {conflict.key}</b>")
+        self.editor_problems.hide()
+        self.editor_panel.show()
+        resolution = self.choices.get(conflict.kind, conflict.key) if self.choices else None
+        right, index = self.right_box.currentData(), self.index
+        if resolution is not None and resolution.own:
+            self._start_editor(resolution.text)
+        elif right is not None and index is not None:
+            # Reading may mean opening a zip, so it runs off the main thread.
+            self.editor.setPlainText("")
+            self.editor.setEnabled(False)
+            task = self._tasks.start(lambda ctx: version_text(index, right)[0])
+            task.succeeded.connect(lambda text: self._start_editor(text, conflict))
+            task.failed.connect(lambda error: self._show_problems([f"Couldn't read it: {error}"]))
+
+    def _start_editor(self, text: str, conflict: Conflict | None = None) -> None:
+        if conflict is not None and conflict is not self.editing:
+            return  # the user has moved on
+        self.editor.setEnabled(True)
+        self.editor.setPlainText(text)
+        self.editor.setFocus()
+
+    def close_editor(self) -> None:
+        self.editing = None
+        self.editor_panel.hide()
+
+    def save_own(self) -> None:
+        """Check the user's version, off the main thread, then save it if it's sound."""
+        conflict, index, text = self.editing, self.index, self.editor.toPlainText()
+        if conflict is None or index is None or self.choices is None:
+            return
+        task = self._tasks.start(lambda ctx: check_own(conflict, text, index))
+        self._check_task = task
+        task.succeeded.connect(lambda problems: self._own_checked(conflict, text, problems, task))
+        task.failed.connect(lambda error: self._show_problems([f"Checking failed: {error}"]))
+
+    def _own_checked(self, conflict: Conflict, text: str, problems: list[str], task: Task) -> None:
+        if task is not self._check_task or self.choices is None or self.index is None:
+            return
+        self._check_task = None
+        self.own_checked.emit(problems)
+        if problems:
+            self._show_problems(problems)
+            return
+        self.choices.write_own(conflict, text, self.index)
+        self.close_editor()
+        if self.current is not None and self.current.key == conflict.key:
+            self._choice_changed()
+        else:
+            self._relabel_all()
+            self._show_patch_state()
+
+    def _show_problems(self, problems: list[str]) -> None:
+        self.editor_problems.setText("Not saved:\n" + "\n".join(problems))
+        self.editor_problems.show()
+
+    def confirm(self, title: str, text: str) -> bool:
+        """Ask a yes/no question. Tests replace this."""
+        answer = QMessageBox.question(self, title, text)
+        return answer == QMessageBox.StandardButton.Yes
+
     def _compared(self, pair: Pair, task: Task) -> None:
         if task is not self._compare_task:
             return  # the user has moved on
@@ -455,6 +809,34 @@ class ConflictsWindow(QDialog):
             pair.same and self.left_box.currentIndex() != self.right_box.currentIndex()
         )
         self.compared.emit(pair)
+
+
+def _rule_text(conflict: Conflict) -> str:
+    rule = conflict.rule
+    if rule is None:
+        return "Whole files: the mod loaded last replaces the others."
+    checked = f"checked in game on {rule.checked}" if rule.checked else "not yet checked in game"
+    if rule.folder:
+        where = f"Rule for {rule.folder}/"
+    else:
+        folder = conflict.winning.path.rpartition("/")[0]
+        where = f"{folder}/ has no rule of its own, so the default applies"
+    return f"{where}: {rule.winner} wins. From {rule.source}, {checked}."
+
+
+def _ignore_text(rule: Ignore, names: dict[str, str]) -> str:
+    if rule.key:
+        return "You chose to ignore this conflict."
+    if rule.kind:
+        return f"You chose to ignore every conflict in {kind_label(rule.kind)}."
+    return f"You chose to ignore every conflict with {names.get(rule.mod, rule.mod)}."
+
+
+def _editable(conflict: Conflict | None) -> bool:
+    """Objects and text files can be rewritten. Pictures and sounds can't."""
+    if conflict is None:
+        return False
+    return conflict.kind != FILE or conflict.key.lower().endswith(TEXT_SUFFIXES)
 
 
 def _rival(claims: tuple[Claim, ...], winner: int) -> int:

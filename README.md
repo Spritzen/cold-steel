@@ -35,6 +35,11 @@ version of the game, so there's no Wine or Proton involved.
   versions side by side with the differences highlighted. You can search for
   anything in the playset by name. The rules for who wins were checked
   against the game itself.
+- **Fixes clashes.** For each clash, pick the version you want, keep the one
+  that wins now, or write your own. Ignore the ones you don't care about.
+  **Generate patch mod** turns your choices into a small mod that loads last,
+  so the game uses them. If a mod updates a thing you chose for, Cold Steel
+  asks you to look at it again.
 - **Search and filter.** By name or tag, outdated mods only, mods with
   problems, or mods that are or aren't in a playset.
 - **Opens quickly.** It remembers what it has already read, so with 50+ mods
@@ -42,7 +47,6 @@ version of the game, so there's no Wine or Proton involved.
 
 ## Coming next
 
-- Fix clashes with a small patch mod
 - Pin mod versions, and merge a whole playset into one mod
 - An Arch package you can install with pacman
 
@@ -88,12 +92,14 @@ Cold Steel never changes Steam's folders or your mods. It changes Paradox's
 files only when you ask: **Play** writes `dlc_load.json` (and a `.mod` file
 for a mod the launcher hasn't seen yet), and **Export to launcher** writes the
 launcher's playsets. Each file is backed up first, and
-nothing is written while the launcher or the game is open.
+nothing is written while the launcher or the game is open. **Generate patch
+mod** adds two things of its own to the game's `mod` folder: a link to the
+patch, and its `.mod` file. Deleting the playset removes them.
 
 | Folder | What's in it |
 |---|---|
 | `~/.config/cold-steel/` | Your settings |
-| `~/.local/share/cold-steel/` | Your playsets, and backups of the Paradox files |
+| `~/.local/share/cold-steel/` | Your playsets, your choices for each playset's clashes, the patch mods, and backups of the Paradox files |
 | `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## For developers

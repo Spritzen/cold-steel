@@ -9,6 +9,10 @@ Each definition writes a line to the game's log saying which one ran.
     python3 tools/live_rules.py check     # reads logs/game.log and reports each rule
     python3 tools/live_rules.py remove    # deletes the two mods again
 
+To check the patch mod instead (Phase 5): in the Conflicts window, choose the
+version that doesn't win now for every conflict, generate the patch mod, play,
+then run `check --patched`. Every rule should then give the other answer.
+
 Run it on the host, where the game runs. It only ever creates or deletes its
 own two mods: it refuses to touch a folder it didn't make.
 """
@@ -32,6 +36,7 @@ class Check:
     rule: str  # the merge_rules.json row it confirms
     expect: str  # the log line, after "COLDSTEEL <name>: ", that the rule predicts
     other: str  # what load order alone would predict
+    clash: bool = True  # False where the game merges both, so there's nothing to choose
 
 
 CHECKS = {
@@ -45,8 +50,8 @@ CHECKS = {
         "common/scripted_variables (first wins)", "aa file in B", "zz file in A"
     ),
     "same-path": Check("whole files (load order)", "B", "A"),
-    "merged-a": Check("common/on_actions (merged)", "A ran", "missing"),
-    "merged-b": Check("common/on_actions (merged)", "B ran", "missing"),
+    "merged-a": Check("common/on_actions (merged)", "A ran", "missing", clash=False),
+    "merged-b": Check("common/on_actions (merged)", "B ran", "missing", clash=False),
 }
 # Localisation can't be logged, so it's shown in a window at the start of the game.
 POPUP = """\
@@ -55,6 +60,14 @@ The window "Cold Steel live check" should read:
   text:   "aa file in B wins"               (outside replace/, the first name wins)
   button: "aa file in A: first name wins"   (the name decides, not the load order)
 All three were seen on 2026-10-01. Anything else means the localisation rule changed.
+"""
+# With the patch mod choosing the other version of each.
+POPUP_PATCHED = """\
+The window "Cold Steel live check" should read:
+  title:  "B outside replace/ wins"
+  text:   "zz file in A wins"
+  button: "zz file in B: later mod wins"
+Anything else means the patch mod's localisation file didn't win.
 """
 
 
@@ -186,7 +199,8 @@ def install(game: Game) -> None:
     )
 
 
-def check(game: Game) -> int:
+def check(game: Game, *, patched: bool = False) -> int:
+    """Report each rule. `patched`: the patch mod chose the other version of each."""
     log_file = game.data_dir / "logs/game.log"
     try:
         lines = log_file.read_text("utf-8", "replace").splitlines()
@@ -204,15 +218,17 @@ def check(game: Game) -> int:
     failed = 0
     for name, want in CHECKS.items():
         got = seen.get(name, [])
-        if got == [want.expect]:
-            verdict = "confirmed"
+        expect = want.other if patched and want.clash else want.expect
+        if got == [expect]:
+            verdict = "the patch's choice won" if patched and want.clash else "confirmed"
         else:
             failed += 1
-            verdict = f"WRONG: got {got or 'nothing'}, rule says {want.expect!r}"
-            if got == [want.other]:
+            says = "the patch chose" if patched and want.clash else "rule says"
+            verdict = f"WRONG: got {got or 'nothing'}, {says} {expect!r}"
+            if not patched and got == [want.other]:
                 verdict += " (that's what load order alone gives)"
         print(f"{want.rule:45} {verdict}")
-    print("\n" + POPUP)
+    print("\n" + (POPUP_PATCHED if patched else POPUP))
     return 1 if failed else 0
 
 
@@ -227,7 +243,8 @@ def remove(game: Game) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[1] not in ("install", "check", "remove"):
+    patched = argv[2:] == ["--patched"] and argv[1] == "check"
+    if len(argv) != 2 + patched or argv[1] not in ("install", "check", "remove"):
         print(__doc__)
         return 2
     game = find_game(DEFAULT_STEAM_DIRS)
@@ -236,7 +253,7 @@ def main(argv: list[str]) -> int:
     elif argv[1] == "remove":
         remove(game)
     else:
-        return check(game)
+        return check(game, patched=patched)
     return 0
 
 
