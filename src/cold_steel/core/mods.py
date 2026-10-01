@@ -30,6 +30,7 @@ class Mod(msgspec.Struct, frozen=True):
     version: str = ""
     supported_version: str = ""
     tags: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()  # names of mods this one loads after
     root: str = ""  # the mod's folder ("" for a local mod that is only a zip)
     archive: str = ""  # the zip, for mods shipped as one
     picture: str = ""  # the thumbnail file, or the zip that holds it
@@ -117,6 +118,7 @@ def read_mod(src: ModSource, cached: CachedMod | None) -> CachedMod:
         version=desc.version,
         supported_version=desc.supported_version,
         tags=desc.tags,
+        dependencies=desc.dependencies,
         root=str(src.root or ""),
         archive=str(archive or ""),
         remote_file_id=desc.remote_file_id,

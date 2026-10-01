@@ -1,0 +1,10 @@
+{
+  "about": "Rules for Sort. Each pattern is a regular expression matched against the mod's name, ignoring case. A mod's declared dependencies still win over these rules.",
+  "first": [
+    {"pattern": "^!", "why": "A leading ! was used to sort a mod to the top of the old launcher's list"}
+  ],
+  "last": [
+    {"pattern": "^(~|zz)", "why": "A leading ~ or zz was used to sort a mod to the bottom of the old launcher's list"},
+    {"pattern": "\\b(patch|compatch|compatibility)\\b", "why": "Patches change other mods, so they must load after them"}
+  ]
+}

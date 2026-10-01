@@ -1,19 +1,24 @@
 """The mod list: a table model over a `Library`, and the filter in front of it."""
 
+import json
+from collections.abc import Sequence
 from enum import IntEnum
 from typing import Any, override
 
 from PySide6.QtCore import (
     QAbstractTableModel,
+    QMimeData,
     QModelIndex,
     QPersistentModelIndex,
     QSortFilterProxyModel,
     Qt,
+    Signal,
 )
 from PySide6.QtGui import QColor, QFont, QImage, QPixmap
 
-from cold_steel.core.library import Library, Playset
+from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
+from cold_steel.store.playsets import Playset
 
 type Index = QModelIndex | QPersistentModelIndex
 
@@ -21,6 +26,7 @@ MOD_ROLE = Qt.ItemDataRole.UserRole  # the Mod itself
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
 WARNING = QColor("#d9534f")
+MIME_TYPE = "application/x-cold-steel-mod-keys"
 
 
 class Column(IntEnum):
@@ -43,6 +49,9 @@ HEADERS = {
 
 
 class ModTableModel(QAbstractTableModel):
+    # A mod's checkbox was clicked in a playset: key, turned on.
+    enabled_toggled = Signal(str, bool)
+
     def __init__(self) -> None:
         super().__init__()
         self._library: Library | None = None
@@ -51,12 +60,19 @@ class ModTableModel(QAbstractTableModel):
         self._blank = QPixmap()  # shown until, or instead of, a thumbnail
         self._positions: dict[str, tuple[int, bool]] = {}  # key -> (position, enabled)
 
-    def set_library(self, library: Library) -> None:
+    def set_library(self, library: Library, missing: Sequence[Mod] = ()) -> None:
+        """`missing`: stand-ins for playset mods that aren't installed."""
         self.beginResetModel()
         self._library = library
-        self._mods = [*library.mods, *library.missing]
+        self._mods = [*library.mods, *missing]
         self._positions = {}
         self.endResetModel()
+
+    def set_missing(self, missing: Sequence[Mod]) -> None:
+        if self._library is not None:
+            positions = self._positions
+            self.set_library(self._library, missing)
+            self._positions = positions
 
     def set_playset(self, playset: Playset | None) -> None:
         """Show load positions for this playset, or none for the full list."""
@@ -81,6 +97,41 @@ class ModTableModel(QAbstractTableModel):
 
     def mod_at(self, row: int) -> Mod:
         return self._mods[row]
+
+    @override
+    def flags(self, index: Index) -> Qt.ItemFlag:
+        flags = super().flags(index) | Qt.ItemFlag.ItemIsDropEnabled
+        if index.isValid() and self._mods[index.row()].key in self._positions:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+            if index.column() == Column.NAME:
+                flags |= Qt.ItemFlag.ItemIsUserCheckable
+        return flags
+
+    @override
+    def setData(self, index: Index, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role != Qt.ItemDataRole.CheckStateRole or not index.isValid():
+            return False
+        key = self._mods[index.row()].key
+        if key not in self._positions:
+            return False
+        # The window changes the playset, then calls set_playset with the result.
+        self.enabled_toggled.emit(key, Qt.CheckState(value) == Qt.CheckState.Checked)
+        return True
+
+    @override
+    def supportedDropActions(self) -> Qt.DropAction:
+        return Qt.DropAction.MoveAction
+
+    @override
+    def mimeTypes(self) -> list[str]:
+        return [MIME_TYPE]
+
+    @override
+    def mimeData(self, indexes: Sequence[QModelIndex]) -> QMimeData:
+        keys = list(dict.fromkeys(self._mods[i.row()].key for i in indexes if i.isValid()))
+        data = QMimeData()
+        data.setData(MIME_TYPE, json.dumps(keys).encode())
+        return data
 
     def is_outdated(self, mod: Mod) -> bool:
         return self._library is not None and self._library.is_outdated(mod)
@@ -114,6 +165,8 @@ class ModTableModel(QAbstractTableModel):
 
         if role == MOD_ROLE:
             return mod
+        if role == Qt.ItemDataRole.CheckStateRole and col == Column.NAME and position:
+            return Qt.CheckState.Checked if position[1] else Qt.CheckState.Unchecked
         if role in (Qt.ItemDataRole.DisplayRole, SORT_ROLE):
             return self._text(mod, col, position, sort=role == SORT_ROLE)
         if role == Qt.ItemDataRole.DecorationRole and col == Column.NAME:
@@ -177,7 +230,14 @@ class Membership(IntEnum):
 
 
 class ModFilter(QSortFilterProxyModel):
-    """Search and filters. Every setter re-filters at once."""
+    """Search and filters. Every setter re-filters at once.
+
+    Dropping dragged mods here asks for a move: rows are shown in load order,
+    so the drop point is "just before this mod", or the end.
+    """
+
+    # keys being moved, and the key they go before ("" for the end)
+    move_requested = Signal(list, str)
 
     def __init__(self, model: ModTableModel) -> None:
         super().__init__()
@@ -192,10 +252,33 @@ class ModFilter(QSortFilterProxyModel):
         self._playset: frozenset[str] | None = None  # None: the full list
         self._in_any_playset: frozenset[str] = frozenset()
 
-    def set_library(self, library: Library) -> None:
+    def set_playsets(self, playsets: Sequence[Playset]) -> None:
+        """Every playset, for the "in a playset" filters."""
         self.beginFilterChange()
-        self._in_any_playset = frozenset(e.key for p in library.playsets for e in p.entries)
+        self._in_any_playset = frozenset(e.key for p in playsets for e in p.entries)
         self.endFilterChange()
+
+    @override
+    def canDropMimeData(
+        self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: Index
+    ) -> bool:
+        return self._playset is not None and data.hasFormat(MIME_TYPE)
+
+    @override
+    def dropMimeData(
+        self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: Index
+    ) -> bool:
+        if not self.canDropMimeData(data, action, row, column, parent):
+            return False
+        keys = json.loads(bytes(data.data(MIME_TYPE).data()).decode())
+        target = parent.row() if parent.isValid() else row  # onto a row, or between rows
+        before = ""
+        if 0 <= target < self.rowCount():
+            before = self.index(target, 0).data(MOD_ROLE).key
+        self.move_requested.emit(keys, before)
+        # False: the move is done by changing the playset, so the view must not
+        # remove the dragged rows itself.
+        return False
 
     def set_text(self, text: str) -> None:
         self.beginFilterChange()

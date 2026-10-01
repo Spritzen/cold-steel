@@ -1,9 +1,11 @@
 """The main Cold Steel window: playsets on the left, the mod list on the right."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from msgspec.structs import replace as msgspec_replace
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -12,11 +14,14 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSplitter,
@@ -26,15 +31,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cold_steel.core import playsets as ops
 from cold_steel.core.jobs import JobContext
-from cold_steel.core.library import Library, Playset
-from cold_steel.paradox.game import GameNotFound
+from cold_steel.core.library import Library
+from cold_steel.core.load_order import sort_playset
+from cold_steel.core.play import PlayError, PlayPlan, plan_play, play
+from cold_steel.core.playsets import PlaysetBook, missing_mods
+from cold_steel.core.share import ShareError, load_share_file, save_share_file
+from cold_steel.core.sync import SyncError, export_playset, import_playset
+from cold_steel.paradox.game import Game, GameNotFound
+from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
-from cold_steel.ui.mod_table import Column, Membership, ModFilter, ModTableModel
+from cold_steel.store.playsets import Playset, playsets_file
+from cold_steel.ui.dlc_dialog import DlcDialog
+from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
 from cold_steel.ui.tasks import Task, TaskRunner
 from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
 
 type Scan = Callable[[JobContext], Library]
+type Launch = Callable[[PlayPlan, Game, Path], Any]
 
 ROW_HEIGHT = SHOWN_SIZE.height() + 4
 
@@ -50,6 +65,9 @@ class MainWindow(QMainWindow):
         scan: Scan | None = None,
         thumbnail_cache: Path | None = None,
         parent: QWidget | None = None,
+        *,
+        playsets_path: Path | None = None,
+        backup_dir: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
@@ -61,9 +79,20 @@ class MainWindow(QMainWindow):
         self._scan_task: Task | None = None
         self._thumbnail_task: Task | None = None
         self._thumbnail_cache = thumbnail_cache or paths.cache_dir() / "thumbnails"
+        self._playsets_path = playsets_path or playsets_file()
+        self.backup_dir = backup_dir or paths.data_dir() / "backups"
+        self.book: PlaysetBook | None = None
+        # Writes dlc_load.json and starts the game. Tests swap in a stand-in.
+        self.launch: Launch = play
 
         self.model = ModTableModel()
         self.filter = ModFilter(self.model)
+        self.model.enabled_toggled.connect(
+            lambda key, on: self._edit(lambda p: ops.set_enabled(p, [key], on))
+        )
+        self.filter.move_requested.connect(
+            lambda keys, before: self._edit(lambda p: ops.move_mods(p, keys, before or None))
+        )
 
         self._build_menu()
         self.pages = QStackedWidget()
@@ -91,9 +120,52 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(quit_)
 
+        def action(text: str, slot: Callable[[], object], shortcut: str = "") -> QAction:
+            act = QAction(text, self)
+            if shortcut:
+                act.setShortcut(QKeySequence(shortcut))
+            act.triggered.connect(slot)
+            return act
+
+        self.new_action = action("&New playset…", self.new_playset, "Ctrl+N")
+        self.copy_action = action("&Copy playset…", self.copy_playset)
+        self.rename_action = action("&Rename playset…", self.rename_playset, "F2")
+        self.delete_action = action("&Delete playset", self.delete_playset)
+        self.sort_action = action("&Sort load order", self.sort_mods)
+        self.dlc_action = action("&DLC…", self.choose_dlc)
+        self.play_action = action("&Play", self.play, "Ctrl+Return")
+        self.export_action = action("&Export to launcher", self.export_to_launcher)
+        self.save_file_action = action("&Save to file…", self.save_to_file)
+        self.load_file_action = action("&Load from file…", self.load_from_file)
+        self.import_menu = QMenu("&Import from launcher", self)
+        self.import_menu.aboutToShow.connect(self._fill_import_menu)
+
+        menu = self.menuBar().addMenu("&Playset")
+        menu.addActions([self.new_action, self.copy_action, self.rename_action])
+        menu.addAction(self.delete_action)
+        menu.addSeparator()
+        menu.addActions([self.play_action, self.sort_action, self.dlc_action])
+        menu.addSeparator()
+        menu.addMenu(self.import_menu)
+        menu.addAction(self.export_action)
+        menu.addSeparator()
+        menu.addActions([self.load_file_action, self.save_file_action])
+
     def _build_library_page(self) -> QWidget:
         self.playset_list = QListWidget()
         self.playset_list.currentRowChanged.connect(self._playset_selected)
+        self.playset_list.itemDoubleClicked.connect(lambda _: self.rename_playset())
+
+        sidebar_buttons = QHBoxLayout()
+        for text, act in (("New", self.new_action), ("Copy", self.copy_action)):
+            sidebar_buttons.addWidget(self._button(text, act))
+        sidebar_buttons.addWidget(self._button("Rename", self.rename_action))
+        sidebar_buttons.addWidget(self._button("Delete", self.delete_action))
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.addWidget(self.playset_list)
+        sidebar_layout.addLayout(sidebar_buttons)
 
         self.search = QLineEdit(placeholderText="Search mods", clearButtonEnabled=True)
         self.search.textChanged.connect(self.filter.set_text)
@@ -117,9 +189,25 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.membership_box)
         filters.addWidget(self.outdated_box)
 
+        self.play_button = self._button("▶  Play", self.play_action)
+        font = self.play_button.font()
+        font.setBold(True)
+        self.play_button.setFont(font)
+        self.playset_bar = QWidget()
+        playset_bar = QHBoxLayout(self.playset_bar)
+        playset_bar.setContentsMargins(0, 0, 0, 0)
+        playset_bar.addWidget(self.play_button)
+        playset_bar.addWidget(self._button("Sort", self.sort_action))
+        playset_bar.addWidget(self._button("DLC…", self.dlc_action))
+        playset_bar.addStretch()
+        playset_bar.addWidget(self._button("Export to launcher", self.export_action))
+
         self.problems_label = QLabel(wordWrap=True)
         self.problems_label.setStyleSheet("color: #d9534f;")
         self.problems_label.hide()
+        self.missing_label = QLabel(wordWrap=True)
+        self.missing_label.setStyleSheet("color: #d9534f;")
+        self.missing_label.hide()
 
         self.table = QTableView()
         self.table.setModel(self.filter)
@@ -128,6 +216,12 @@ class MainWindow(QMainWindow):
         self.table.setIconSize(SHOWN_SIZE)
         self.table.setWordWrap(False)
         self.table.setAlternatingRowColors(True)
+        self.table.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDragDropOverwriteMode(False)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
         header = self.table.horizontalHeader()
@@ -139,16 +233,28 @@ class MainWindow(QMainWindow):
         right = QWidget()
         layout = QVBoxLayout(right)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.playset_bar)
         layout.addLayout(filters)
         layout.addWidget(self.problems_label)
+        layout.addWidget(self.missing_label)
         layout.addWidget(self.table)
 
         splitter = QSplitter()
-        splitter.addWidget(self.playset_list)
+        splitter.addWidget(sidebar)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([240, 960])
+        splitter.setSizes([260, 940])
         return splitter
+
+    @staticmethod
+    def _button(text: str, action: QAction) -> QPushButton:
+        """A button that runs `action` and is enabled whenever it is."""
+        button = QPushButton(text)
+        button.setToolTip(action.text().replace("&", ""))
+        button.clicked.connect(action.trigger)
+        action.enabledChanged.connect(button.setEnabled)
+        button.setEnabled(action.isEnabled())
+        return button
 
     def _build_message_page(self) -> QWidget:
         self.message = QLabel(wordWrap=True, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -208,13 +314,22 @@ class MainWindow(QMainWindow):
 
     def show_library(self, library: Library) -> None:
         self.library = library
-        self.model.set_library(library)
-        self.filter.set_library(library)
-        self._fill_playsets(library)
+        problems = list(library.problems)
+        if self.book is None:
+            try:
+                self.book = PlaysetBook.open(self._playsets_path, library)
+            except OSError as error:
+                problems.append(f"Your playsets couldn't be loaded: {error}")
+            else:
+                problems += self.book.problems
+        playsets = self.book.playsets if self.book else ()
+        self.model.set_library(library, missing_mods(playsets, library))
+        self.filter.set_playsets(playsets)
+        self._fill_playsets()
         self._fill_tags(library)
 
-        self.problems_label.setText("\n".join(library.problems))
-        self.problems_label.setVisible(bool(library.problems))
+        self.problems_label.setText("\n".join(problems))
+        self.problems_label.setVisible(bool(problems))
         self.game_label.setText(f"Stellaris {library.game.version_name}")
         self.game_label.setToolTip(str(library.game.install_dir))
         outdated = sum(library.is_outdated(m) for m in library.mods)
@@ -258,29 +373,36 @@ class MainWindow(QMainWindow):
 
     # The sidebar and filters
 
-    def _fill_playsets(self, library: Library) -> None:
-        current = self.playset_list.currentItem()
-        previous = current.data(Qt.ItemDataRole.UserRole) if current else None
+    def _fill_playsets(self, select: str | None = None) -> None:
+        """Rebuild the sidebar. Keeps the current playset unless `select` names another."""
+        if select is None:
+            current = self.playset_list.currentItem()
+            select = current.data(Qt.ItemDataRole.UserRole) if current else None
+        library, book = self.library, self.book
         self.playset_list.blockSignals(True)
         self.playset_list.clear()
-        everything = QListWidgetItem(f"All mods ({len(library.mods)})")
+        everything = QListWidgetItem(f"All mods ({len(library.mods) if library else 0})")
         everything.setData(Qt.ItemDataRole.UserRole, None)
         self.playset_list.addItem(everything)
         selected = 0
-        for row, playset in enumerate(library.playsets, 1):
-            item = QListWidgetItem(f"{playset.name} ({len(playset.entries)})")
+        for row, playset in enumerate(book.playsets if book else (), 1):
+            item = QListWidgetItem(self._playset_label(playset))
             item.setData(Qt.ItemDataRole.UserRole, playset.id)
-            if playset.active:
+            if book and playset.id == book.active:
                 font = QFont()
                 font.setBold(True)
                 item.setFont(font)
-                item.setToolTip("The launcher's active playset")
-            if playset.id == previous:
+                item.setToolTip("The playset you last played")
+            if playset.id == select:
                 selected = row
             self.playset_list.addItem(item)
         self.playset_list.blockSignals(False)
         self.playset_list.setCurrentRow(selected)
         self._playset_selected(selected)
+
+    @staticmethod
+    def _playset_label(playset: Playset) -> str:
+        return f"{playset.name} ({len(playset.entries)})"
 
     def _fill_tags(self, library: Library) -> None:
         current = self.tag_box.currentData()
@@ -297,20 +419,321 @@ class MainWindow(QMainWindow):
 
     def selected_playset(self) -> Playset | None:
         item = self.playset_list.currentItem()
-        if item is None or self.library is None:
+        if item is None or self.book is None:
             return None
         pid = item.data(Qt.ItemDataRole.UserRole)
-        return next((p for p in self.library.playsets if p.id == pid), None)
+        return self.book.get(pid) if pid else None
 
     def _playset_selected(self, row: int) -> None:
         playset = self.selected_playset()
-        self.model.set_playset(playset)
-        self.filter.set_playset(playset)
+        self._show_playset(playset)
         self.table.setColumnHidden(Column.POSITION, playset is None)
         if playset is None:
             self.table.sortByColumn(Column.NAME, Qt.SortOrder.AscendingOrder)
         else:
             self.table.sortByColumn(Column.POSITION, Qt.SortOrder.AscendingOrder)
+        chosen = playset is not None
+        for act in (
+            self.copy_action,
+            self.rename_action,
+            self.delete_action,
+            self.sort_action,
+            self.dlc_action,
+            self.play_action,
+            self.export_action,
+            self.save_file_action,
+        ):
+            act.setEnabled(chosen)
+        self.new_action.setEnabled(self.book is not None)
+        self.load_file_action.setEnabled(self.book is not None)
+        self.import_menu.setEnabled(self.book is not None)
+        self.playset_bar.setVisible(chosen)
+
+    def _show_playset(self, playset: Playset | None) -> None:
+        """Show this playset's order and missing mods. None shows all mods."""
+        self.model.set_playset(playset)
+        self.filter.set_playset(playset)
+        installed = {m.key for m in self.library.mods} if self.library else set()
+        missing = (
+            [e.name or e.key for e in playset.entries if e.key not in installed]
+            if (playset)
+            else []
+        )
+        if missing:
+            self.missing_label.setText(
+                f"{len(missing)} mod(s) in this playset aren't installed (unsubscribed or "
+                "deleted), so Play will leave them out: " + ", ".join(missing)
+            )
+        self.missing_label.setVisible(bool(missing))
+
+    # Changing playsets
+
+    def _edit(self, change: Callable[[Playset], Playset]) -> None:
+        """Apply `change` to the selected playset, save it, and show the result."""
+        playset = self.selected_playset()
+        if playset is None or self.book is None:
+            return
+        changed = change(playset)
+        if changed == playset:
+            return
+        self.book.update(changed)
+        self._playset_changed(changed)
+
+    def _playset_changed(self, playset: Playset) -> None:
+        self._show_playset(playset)
+        item = self.playset_list.currentItem()
+        if item is not None:
+            item.setText(self._playset_label(playset))
+        if self.book:
+            self.filter.set_playsets(self.book.playsets)
+
+    def _reload_playsets(self, select: str | None = None) -> None:
+        """After adding or removing playsets: rebuild the list and the missing mods."""
+        if self.library is None or self.book is None:
+            return
+        self.model.set_missing(missing_mods(self.book.playsets, self.library))
+        self.filter.set_playsets(self.book.playsets)
+        self._fill_playsets(select)
+
+    def new_playset(self) -> None:
+        if self.book is None:
+            return
+        name = self.ask_text("New playset", "Name:", self.book.unused_name("New playset"))
+        if name:
+            self._reload_playsets(self.book.create(name).id)
+
+    def copy_playset(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.book is None:
+            return
+        wanted = self.book.unused_name(f"{playset.name} (copy)")
+        name = self.ask_text("Copy playset", "Name of the copy:", wanted)
+        if name:
+            self._reload_playsets(self.book.copy(playset.id, name).id)
+
+    def rename_playset(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.book is None:
+            return
+        name = self.ask_text("Rename playset", "New name:", playset.name)
+        if name and name != playset.name:
+            self._playset_changed(self.book.rename(playset.id, name))
+
+    def delete_playset(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.book is None:
+            return
+        if self.confirm(
+            "Delete playset",
+            f"Delete \u201c{playset.name}\u201d? Your mods stay installed. "
+            "The launcher's copy, if it has one, isn't touched.",
+        ):
+            self.book.delete(playset.id)
+            self._reload_playsets("")
+
+    def sort_mods(self) -> None:
+        if self.library is None:
+            return
+        mods = {m.key: m for m in self.library.mods}
+        self._edit(lambda p: sort_playset(p, mods))
+
+    def choose_dlc(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.library is None:
+            return
+        disabled = self.ask_dlc(playset)
+        if disabled is not None:
+            self._edit(lambda p: msgspec_replace(p, disabled_dlcs=disabled))
+
+    def selected_keys(self) -> list[str]:
+        """The selected mods, top to bottom as shown."""
+        rows = sorted(i.row() for i in self.table.selectionModel().selectedRows())
+        return [self.filter.index(r, Column.NAME).data(MOD_ROLE).key for r in rows]
+
+    def add_to_playset(self, playset_id: str, keys: Sequence[str]) -> None:
+        if self.book is None or self.library is None:
+            return
+        playset = self.book.get(playset_id)
+        if playset is None:
+            return
+        changed = ops.add_mods(playset, keys, self.library)
+        self.book.update(changed)
+        self.filter.set_playsets(self.book.playsets)
+        for row in range(1, self.playset_list.count()):
+            item = self.playset_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == playset_id:
+                item.setText(self._playset_label(changed))
+        added = len(changed.entries) - len(playset.entries)
+        self.statusBar().showMessage(f"Added {added} mod(s) to {playset.name}")
+
+    def _table_menu(self, pos: QPoint) -> None:
+        keys = self.selected_keys()
+        if not keys or self.book is None:
+            return
+        menu = QMenu(self)
+        playset = self.selected_playset()
+        if playset is None:
+            add = menu.addMenu("Add to playset")
+            for target in self.book.playsets:
+                act = add.addAction(target.name)
+                act.triggered.connect(lambda _=False, pid=target.id: self.add_to_playset(pid, keys))
+            add.setEnabled(bool(self.book.playsets))
+        else:
+            menu.addAction("Turn on").triggered.connect(
+                lambda: self._edit(lambda p: ops.set_enabled(p, keys, True))
+            )
+            menu.addAction("Turn off").triggered.connect(
+                lambda: self._edit(lambda p: ops.set_enabled(p, keys, False))
+            )
+            menu.addSeparator()
+            first = playset.entries[0].key if playset.entries else None
+            menu.addAction("Move to top").triggered.connect(
+                lambda: self._edit(lambda p: ops.move_mods(p, keys, first))
+            )
+            menu.addAction("Move to bottom").triggered.connect(
+                lambda: self._edit(lambda p: ops.move_mods(p, keys, None))
+            )
+            menu.addSeparator()
+            menu.addAction("Remove from playset").triggered.connect(
+                lambda: self._edit(lambda p: ops.remove_mods(p, keys))
+            )
+        menu.popup(self.table.viewport().mapToGlobal(pos))
+
+    # The launcher, files and Play
+
+    def _fill_import_menu(self) -> None:
+        self.import_menu.clear()
+        launcher = self.library.launcher_playsets if self.library else ()
+        for playset in launcher:
+            act = self.import_menu.addAction(self._playset_label(playset))
+            act.triggered.connect(lambda _=False, p=playset: self.import_from_launcher(p))
+        if not launcher:
+            self.import_menu.addAction("The launcher has no playsets").setEnabled(False)
+
+    def import_from_launcher(self, launcher_playset: Playset) -> None:
+        if self.book is None:
+            return
+        playset = import_playset(self.book, launcher_playset)
+        self._reload_playsets(playset.id)
+        self.statusBar().showMessage(f"Imported {playset.name} from the launcher")
+
+    def export_to_launcher(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.book is None or self.library is None:
+            return
+        try:
+            result = export_playset(self.book, playset, self.library, self.backup_dir)
+        except (SyncError, LauncherDbError) as error:
+            self.tell("Export to launcher", str(error))
+            return
+        text = f"The launcher now has \u201c{playset.name}\u201d."
+        if result.skipped:
+            text += (
+                "\n\nThe launcher doesn't know these mods yet, so they were left out. "
+                "Open the launcher once so it finds them, then export again:\n"
+                + "\n".join(result.skipped)
+            )
+        if result.backup:
+            text += f"\n\nThe launcher database was backed up first, to {result.backup}"
+        self.tell("Export to launcher", text)
+
+    def save_to_file(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.library is None:
+            return
+        path = self.ask_save_path(f"{playset.name}.json")
+        if path is None:
+            return
+        try:
+            left_out = save_share_file(playset, self.library, path)
+        except OSError as error:
+            self.tell("Save to file", f"Couldn't save {path}: {error}")
+            return
+        if left_out:
+            self.tell(
+                "Save to file",
+                "Local mods can't be shared, so these were left out:\n" + "\n".join(left_out),
+            )
+        self.statusBar().showMessage(f"Saved {playset.name} to {path}")
+
+    def load_from_file(self) -> None:
+        if self.book is None:
+            return
+        path = self.ask_open_path()
+        if path is None:
+            return
+        try:
+            shared = load_share_file(path)
+        except ShareError as error:
+            self.tell("Load from file", str(error))
+            return
+        playset = self.book.add(
+            msgspec_replace(shared.playset, name=self.book.unused_name(shared.playset.name))
+        )
+        self._reload_playsets(playset.id)
+        if shared.left_out:
+            self.tell(
+                "Load from file",
+                "These mods have no Workshop ID, so they couldn't be added:\n"
+                + "\n".join(shared.left_out),
+            )
+        self.statusBar().showMessage(f"Loaded {playset.name}")
+
+    def play(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or self.book is None or self.library is None:
+            return
+        plan = plan_play(playset, self.library)
+        if plan.skipped and not self.confirm(
+            "Some mods aren't installed",
+            "These mods aren't installed, so the game won't load them:\n"
+            + "\n".join(plan.skipped)
+            + "\n\nPlay anyway?",
+        ):
+            return
+        try:
+            self.launch(plan, self.library.game, self.backup_dir)
+        except PlayError as error:
+            self.tell("Play", str(error))
+            return
+        self.book.set_active(playset.id)
+        self._fill_playsets(playset.id)
+        self.statusBar().showMessage(f"Stellaris is starting with {playset.name}")
+
+    # Questions for the user. Tests replace these.
+
+    def ask_text(self, title: str, label: str, text: str) -> str | None:
+        value, ok = QInputDialog.getText(self, title, label, QLineEdit.EchoMode.Normal, text)
+        return value.strip() if ok and value.strip() else None
+
+    def confirm(self, title: str, text: str) -> bool:
+        answer = QMessageBox.question(self, title, text)
+        return answer == QMessageBox.StandardButton.Yes
+
+    def tell(self, title: str, text: str) -> None:
+        QMessageBox.information(self, title, text)
+
+    def ask_dlc(self, playset: Playset) -> tuple[str, ...] | None:
+        """The DLC folders to turn off, or None if cancelled."""
+        if self.library is None:
+            return None
+        dialog = DlcDialog(self.library.dlcs, playset.disabled_dlcs, self)
+        return dialog.disabled() if dialog.exec() else None
+
+    def ask_save_path(self, name: str) -> Path | None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save playset", str(Path.home() / name), "Playset files (*.json)"
+        )
+        return Path(path) if path else None
+
+    def ask_open_path(self) -> Path | None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load playset",
+            str(Path.home()),
+            "Playset files (*.json *.zip);;All files (*)",
+        )
+        return Path(path) if path else None
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         self.tasks.cancel_all()

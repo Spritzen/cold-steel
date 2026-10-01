@@ -9,6 +9,10 @@ CREATE TABLE playsets (
     id char(36) NOT NULL PRIMARY KEY, name varchar(255) NOT NULL, isActive boolean,
     loadOrder varchar(255), createdOn datetime NOT NULL, isRemoved boolean NOT NULL DEFAULT false
 );
+CREATE TABLE playsets_dlcs (
+    playsetId char(36) NOT NULL, dlcId text NOT NULL, enabled boolean NOT NULL DEFAULT '0',
+    PRIMARY KEY (playsetId, dlcId)
+);
 CREATE TABLE playsets_mods (
     playsetId char(36) NOT NULL, modId char(36) NOT NULL, enabled boolean DEFAULT '1',
     position integer
@@ -43,3 +47,11 @@ INSERT INTO playsets_mods VALUES
   ('p-main', 'm-gamma', 0, 1),
   ('p-second', 'm-gamma', 1, 0),
   ('p-removed', 'm-alpha', 1, 0);
+
+-- The launcher's DLC ids: some are the folder name without its number, and
+-- dlc032 is named after the DLC's old title, not its folder.
+INSERT INTO playsets_dlcs VALUES
+  ('p-main', 'arachnoid', 0),
+  ('p-main', 'dlc032_cybernetics', 0),
+  ('p-second', 'arachnoid', 1),
+  ('p-second', 'dlc032_cybernetics', 1);

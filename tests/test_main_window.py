@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QModelIndex
 from pytestqt.qtbot import QtBot
 
 from cold_steel.core.library import Scanner
@@ -24,7 +25,12 @@ def test_window_opens_and_closes(qtbot: QtBot) -> None:
 
 @pytest.fixture
 def window(qtbot: QtBot, sample_install: SampleInstall, tmp_path: Path) -> MainWindow:
-    win = MainWindow(Scanner(*sample_install.scanner_args()), tmp_path / "thumbnails")
+    win = MainWindow(
+        Scanner(*sample_install.scanner_args()),
+        tmp_path / "thumbnails",
+        playsets_path=tmp_path / "data/playsets.json",
+        backup_dir=tmp_path / "data/backups",
+    )
     qtbot.addWidget(win)
     with qtbot.waitSignal(win.library_shown, timeout=10_000):
         win.show()
@@ -121,3 +127,167 @@ def test_missing_game_shows_how_to_fix_it(qtbot: QtBot, tmp_path: Path) -> None:
     win.show()
     qtbot.waitUntil(lambda: win.pages.currentIndex() == 1, timeout=5000)
     assert "Stellaris wasn't found" in win.message.text()
+
+
+# Phase 2: playsets
+
+
+def sidebar(window: MainWindow) -> list[str]:
+    return [window.playset_list.item(i).text() for i in range(window.playset_list.count())]
+
+
+def name_index(window: MainWindow, name: str) -> QModelIndex:
+    for row in range(window.filter.rowCount()):
+        index = window.filter.index(row, Column.NAME)
+        if index.data(MOD_ROLE).name == name:
+            return index
+    raise AssertionError(f"{name} isn't shown")
+
+
+def test_new_rename_copy_delete(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    answers = iter(["Fresh", "Renamed", "Renamed copy"])
+    monkeypatch.setattr(window, "ask_text", lambda *args: next(answers))
+    monkeypatch.setattr(window, "confirm", lambda *args: True)
+
+    window.new_action.trigger()
+    assert sidebar(window)[-1] == "Fresh (0)"
+    assert window.selected_playset() is not None
+    window.rename_action.trigger()
+    window.copy_action.trigger()
+    assert sidebar(window)[-2:] == ["Renamed (0)", "Renamed copy (0)"]
+
+    window.delete_action.trigger()
+    assert sidebar(window) == [
+        "All mods (5)",
+        "Main Playset (4)",
+        "Second Playset (1)",
+        "Renamed (0)",
+    ]
+    assert window.playset_list.currentRow() == 0
+
+
+def test_add_mods_from_the_full_list(window: MainWindow) -> None:
+    assert window.book is not None
+    second = window.book.playsets[1]
+    window.add_to_playset(second.id, ["workshop:2000000002"])
+    assert sidebar(window)[2] == "Second Playset (2)"
+
+    window.playset_list.setCurrentRow(2)
+    assert shown(window) == ["Gamma Soundtrack", "Beta Ships"]
+
+
+def test_checkbox_turns_a_mod_on_and_off(window: MainWindow) -> None:
+    from PySide6.QtCore import Qt
+
+    window.playset_list.setCurrentRow(1)
+    gamma = name_index(window, "Gamma Soundtrack")
+    assert gamma.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Unchecked
+    window.filter.setData(gamma, Qt.CheckState.Checked.value, Qt.ItemDataRole.CheckStateRole)
+
+    assert window.book is not None
+    assert window.book.playsets[0].entries[1].enabled
+    gamma = name_index(window, "Gamma Soundtrack")
+    assert gamma.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_dragging_sets_the_load_order(window: MainWindow) -> None:
+    from PySide6.QtCore import Qt
+
+    window.playset_list.setCurrentRow(1)
+    local = name_index(window, "My Local Tweaks")
+    data = window.filter.mimeData([local])
+    # Dropped on the first row: it goes before Alpha Interface.
+    window.filter.dropMimeData(data, Qt.DropAction.MoveAction, 0, 0, QModelIndex())
+    assert shown(window) == [
+        "My Local Tweaks",
+        "Alpha Interface",
+        "Gamma Soundtrack",
+        "Unsubscribed Mod",
+    ]
+    # Dropped below the last row: the end.
+    data = window.filter.mimeData([name_index(window, "My Local Tweaks")])
+    window.filter.dropMimeData(data, Qt.DropAction.MoveAction, -1, -1, QModelIndex())
+    assert shown(window)[-1] == "My Local Tweaks"
+
+
+def test_missing_mods_are_shown_clearly(window: MainWindow) -> None:
+    from PySide6.QtCore import Qt
+
+    window.playset_list.setCurrentRow(1)
+    assert window.missing_label.isVisibleTo(window)
+    assert "Unsubscribed Mod" in window.missing_label.text()
+    gone = name_index(window, "Unsubscribed Mod")
+    assert gone.siblingAtColumn(Column.SOURCE).data() == "Not installed"
+    assert gone.data(Qt.ItemDataRole.FontRole).italic()
+
+    window.playset_list.setCurrentRow(2)
+    assert not window.missing_label.isVisibleTo(window)
+
+
+def test_sort_and_dlc(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    window.playset_list.setCurrentRow(1)
+    monkeypatch.setattr(window, "ask_dlc", lambda playset: ("dlc032_machine_age",))
+    window.dlc_action.trigger()
+    selected = window.selected_playset()
+    assert selected is not None and selected.disabled_dlcs == ("dlc032_machine_age",)
+
+    window.sort_action.trigger()  # no rule matches the sample mods: the order stays
+    assert shown(window)[0] == "Alpha Interface"
+
+
+def test_play_asks_about_missing_mods_then_launches(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        window, "launch", lambda plan, game, backups: launched.append(plan.load.enabled_mods)
+    )
+    window.playset_list.setCurrentRow(2)  # Second Playset: not the active one
+
+    monkeypatch.setattr(window, "confirm", lambda *args: False)
+    window.playset_list.setCurrentRow(1)
+    window.play_action.trigger()
+    assert launched == []  # Main Playset has a missing mod, and we said no
+
+    window.playset_list.setCurrentRow(2)
+    window.play_action.trigger()
+    assert launched == [("mod/ugc_2000000003.mod",)]
+    assert window.playset_list.item(2).font().bold()
+    assert not window.playset_list.item(1).font().bold()
+    assert "starting with Second Playset" in window.statusBar().currentMessage()
+
+
+def test_a_refused_play_is_explained(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cold_steel.core.play import PlayError
+
+    def refuse(*args: object) -> None:
+        raise PlayError("Steam isn't running.")
+
+    told: list[str] = []
+    monkeypatch.setattr(window, "launch", refuse)
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+    window.playset_list.setCurrentRow(2)
+    window.play_action.trigger()
+    assert told == ["Steam isn't running."]
+    assert window.playset_list.item(1).font().bold()  # still the launcher's active one
+
+
+def test_save_and_load_a_file(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "shared.json"
+    monkeypatch.setattr(window, "ask_save_path", lambda name: path)
+    monkeypatch.setattr(window, "ask_open_path", lambda: path)
+    monkeypatch.setattr(window, "tell", lambda *args: None)
+
+    window.playset_list.setCurrentRow(1)
+    window.save_file_action.trigger()
+    window.load_file_action.trigger()
+    # The local mod can't be shared; the rest comes back, under a new name.
+    assert sidebar(window)[-1] == "Main Playset (2) (3)"
+
+
+def test_import_from_launcher(window: MainWindow) -> None:
+    assert window.library is not None
+    window.import_from_launcher(window.library.launcher_playsets[1])
+    assert sidebar(window)[-1] == "Second Playset (2) (1)"

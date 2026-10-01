@@ -26,6 +26,7 @@ from cold_steel.core.mods import (
     read_outer,
 )
 from cold_steel.core.version import is_outdated
+from cold_steel.paradox.dlc import Dlc, find_dlcs, launcher_dlc_folder
 from cold_steel.paradox.game import DEFAULT_STEAM_DIRS, Game, find_game
 from cold_steel.paradox.launcher_db import (
     LauncherData,
@@ -35,10 +36,11 @@ from cold_steel.paradox.launcher_db import (
 )
 from cold_steel.store import paths
 from cold_steel.store.files import load_msgpack, save_msgpack
+from cold_steel.store.playsets import Playset, PlaysetEntry
 from cold_steel.store.settings import Settings
 
 # Bump when Mod or CachedMod change shape, so old caches are thrown away.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 class CacheData(msgspec.Struct):
@@ -48,25 +50,13 @@ class CacheData(msgspec.Struct):
 
 
 @dataclass(frozen=True)
-class PlaysetEntry:
-    key: str  # a Mod.key, from Library.mods or Library.missing
-    enabled: bool
-
-
-@dataclass(frozen=True)
-class Playset:
-    id: str
-    name: str
-    active: bool
-    entries: tuple[PlaysetEntry, ...]  # in load order
-
-
-@dataclass(frozen=True)
 class Library:
     game: Game
     mods: tuple[Mod, ...]  # installed mods, by name
-    missing: tuple[Mod, ...] = ()  # in a playset but no longer installed
-    playsets: tuple[Playset, ...] = ()
+    dlcs: tuple[Dlc, ...] = ()
+    # The launcher's playsets, for importing. Ours are in core.playsets.
+    launcher_playsets: tuple[Playset, ...] = ()
+    launcher_active: str = ""  # the id of the launcher's active playset
     problems: tuple[str, ...] = ()  # things that stopped part of the scan
     _outdated: dict[str, bool] = field(default_factory=dict, compare=False, repr=False)
 
@@ -113,20 +103,21 @@ def scan_library(ctx: JobContext, game: Game, cache_file: Path) -> Library:
         save_msgpack(cache_file, new_cache)
 
     installed = {key: entry.mod for key, entry in mods.items()}
+    dlcs = find_dlcs(game.install_dir)
     problems: list[str] = []
     try:
         launcher = read_launcher(game.launcher_db)
     except LauncherDbError as error:
         launcher = LauncherData(playsets=(), thumbnails={})
         problems.append(str(error))
-    playsets, missing = _match_playsets(launcher.playsets, installed)
     _add_launcher_thumbnails(installed, launcher.thumbnails)
 
     return Library(
         game=game,
         mods=tuple(sorted(installed.values(), key=lambda m: (m.name.casefold(), m.key))),
-        missing=tuple(missing.values()),
-        playsets=tuple(playsets),
+        dlcs=dlcs,
+        launcher_playsets=tuple(_match_playsets(launcher.playsets, installed, dlcs)),
+        launcher_active=next((p.id for p in launcher.playsets if p.active), ""),
         problems=tuple(problems),
     )
 
@@ -199,10 +190,14 @@ def _target(game: Game, entry: CachedDescriptor) -> tuple[Path | None, Path | No
 
 
 def _match_playsets(
-    launcher: tuple[LauncherPlayset, ...], installed: dict[str, Mod]
-) -> tuple[list[Playset], dict[str, Mod]]:
+    launcher: tuple[LauncherPlayset, ...], installed: dict[str, Mod], dlcs: tuple[Dlc, ...]
+) -> list[Playset]:
+    """The launcher's playsets, with each mod matched to its Mod.key.
+
+    A mod that's no longer installed keeps a key and its name, so it can be
+    shown as missing instead of being silently dropped.
+    """
     by_path = {os.path.normpath(m.root or m.archive): m.key for m in installed.values()}
-    missing: dict[str, Mod] = {}
     playsets: list[Playset] = []
     for ps in launcher:
         entries: list[PlaysetEntry] = []
@@ -213,21 +208,19 @@ def _match_playsets(
                     if path and os.path.normpath(path) in by_path:
                         key = by_path[os.path.normpath(path)]
                         break
-            if key not in installed:
-                key = key or f"local:{lm.dir_path or lm.archive_path or lm.name}"
-                missing.setdefault(
-                    key,
-                    Mod(
-                        key=key,
-                        source="workshop" if lm.steam_id else "local",
-                        name=lm.name or key,
-                        remote_file_id=lm.steam_id,
-                        installed=False,
-                    ),
-                )
-            entries.append(PlaysetEntry(key=key, enabled=lm.enabled))
-        playsets.append(Playset(ps.id, ps.name, ps.active, tuple(entries)))
-    return playsets, missing
+            key = key or f"local:{Path(lm.dir_path or lm.archive_path).stem or lm.name}"
+            entries.append(PlaysetEntry(key=key, enabled=lm.enabled, name=lm.name))
+        disabled = (launcher_dlc_folder(d, dlcs) for d in ps.disabled_dlcs)
+        playsets.append(
+            Playset(
+                id=ps.id,
+                name=ps.name,
+                entries=tuple(entries),
+                disabled_dlcs=tuple(sorted({d for d in disabled if d})),
+                launcher_id=ps.id,
+            )
+        )
+    return playsets
 
 
 def _add_launcher_thumbnails(installed: dict[str, Mod], thumbnails: dict[str, str]) -> None:
