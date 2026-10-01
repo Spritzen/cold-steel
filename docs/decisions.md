@@ -18,3 +18,4 @@ Open questions don't go here. They live in the phase they block
 | 7 | **Take four features from STG:** playset merge, health checks, error log reader, snapshots + symlink deploy | They're proven in STG and none of them are in Irony. See [from-stg.md](reference/from-stg.md) | 2026-10-01 | |
 | 8 | **Decisions are rows in this file**, not separate documents | STG's 111 decision files made the current answer hard to find | 2026-10-01 | |
 | 9 | **Speed rules:** never re-parse an unchanged file (check timestamp, then xxhash); cache with msgspec; parse in parallel; never block the window. Compile with mypyc only if profiling shows the need | Large playsets are where Irony feels slow, and the cache shapes the design so it has to be there from the start | 2026-10-01 | |
+| 10 | **Code lives at [github.com/Spritzen/cold-steel](https://github.com/Spritzen/cold-steel)**, public, main branch `main` | Set up with the initial commit | 2026-10-01 | |
