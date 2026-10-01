@@ -119,10 +119,16 @@ class ConflictFinder:
     playset: Playset
     library: Library
     rules: Rules = field(default_factory=load_rules)
+    # Mods to leave out: the playset's own patch mod, so the clashes it settles still show.
+    leave_out: frozenset[str] = frozenset()
 
     def __call__(self, ctx: JobContext) -> Found:
         installed = {m.key for m in self.library.mods if m.installed}
-        enabled = (e.key for e in self.playset.entries if e.enabled and e.key in installed)
+        enabled = (
+            e.key
+            for e in self.playset.entries
+            if e.enabled and e.key in installed and e.key not in self.leave_out
+        )
         order = tuple(k for k in (GAME, *enabled) if k in self.index.layers)
         ctx.progress(0, 0, "Finding conflicts")
         tables = [self.index.tables(layer) for layer in order]

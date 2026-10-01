@@ -534,3 +534,162 @@ def test_conflicts_for_one_mod_and_after_a_change(qtbot: QtBot, clashing: MainWi
         "Technology (1)": [("tech_x", "Alpha Interface")],
         "Whole files (1)": [("interface/same.gui", "Alpha Interface")],
     }
+
+
+# Phase 5: resolving conflicts
+
+
+def select(conflicts: ConflictsWindow, key: str) -> None:
+    conflicts.tree.expandAll()
+    found = conflicts.tree.findItems(key, Qt.MatchFlag.MatchRecursive)
+    assert found, groups(conflicts)
+    conflicts.tree.setCurrentItem(found[0])
+
+
+def test_choose_a_winner_and_generate_the_patch(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    told: list[str] = []
+    monkeypatch.setattr(clashing, "tell", lambda title, text: told.append(text))
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    # The winner is on the right: My Local's cost = 2 is on the left.
+    conflicts.use_left.click()
+    assert "Your choice:</b> My Local Tweaks" in conflicts.choice.text()
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "✓ My Local Tweaks")]
+    assert "not in the game yet" in conflicts.patch_label.text()
+
+    # Generating rescans, which finds the conflicts again.
+    with (
+        qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.patch_generated, timeout=20_000) as generated,
+    ):
+        conflicts.generate_button.click()
+    plan = generated.args[0]
+    assert len(plan.written) == 1 and plan.left_out == ()
+    assert "holds 1 choice" in told[0]
+
+    # The patch is last in the playset, and the scan found it.
+    playset = clashing.selected_playset()
+    assert playset is not None
+    assert playset.entries[-1].name == "Cold Steel patch: Main Playset"
+    assert clashing.library is not None
+    assert playset.entries[-1].key in {m.key for m in clashing.library.mods}
+    # The window still shows the clash underneath, with the choice.
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "✓ My Local Tweaks")]
+    assert "up to date with your 1 choice" in conflicts.patch_label.text()
+
+
+def test_ignore_a_conflict_a_type_or_a_mod(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    menu = [a.text() for a in conflicts.ignore_button.menu().actions()]
+    assert menu == [
+        "This conflict",
+        "Every conflict in Technology",
+        "Every conflict with Alpha Interface",  # in load order
+        "Every conflict with My Local Tweaks",
+    ]
+    conflicts.ignore_button.menu().actions()[0].trigger()
+    assert list(groups(conflicts)) == ["Whole files (1)"]
+
+    conflicts.ignored_box.setChecked(True)
+    select(conflicts, "tech_x")
+    assert "You chose to ignore this conflict." in conflicts.choice.text()
+    conflicts.stop_ignoring_button.click()
+    conflicts.ignored_box.setChecked(False)
+    assert "Technology (1)" in groups(conflicts)
+
+    select(conflicts, "tech_x")
+    conflicts.ignore_button.menu().actions()[2].trigger()  # every conflict with Alpha
+    assert groups(conflicts) == {}
+
+
+def test_write_your_own_version(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.own_button.click()
+    assert conflicts.editor_panel.isVisibleTo(conflicts)
+    # It starts from the winner, on the right.
+    qtbot.waitUntil(lambda: "cost = 1" in conflicts.editor.toPlainText(), timeout=5000)
+
+    conflicts.editor.setPlainText("tech_x = {\n\tcost = 3\n}\n}")
+    with qtbot.waitSignal(conflicts.own_checked, timeout=5000) as checked:
+        conflicts.save_own()
+    assert checked.args[0][0].startswith("Line 4:")
+    assert "Not saved" in conflicts.editor_problems.text()
+    assert conflicts.choices is not None and not conflicts.choices.resolutions
+
+    conflicts.editor.setPlainText("tech_x = {\n\tcost = 3\n}\n")
+    with qtbot.waitSignal(conflicts.own_checked, timeout=5000) as checked:
+        conflicts.save_own()
+    assert checked.args[0] == []
+    assert not conflicts.editor_panel.isVisibleTo(conflicts)
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "✓ Your own version")]
+
+
+def test_a_changed_mod_needs_another_look(
+    qtbot: QtBot, clashing: MainWindow, sample_install: SampleInstall
+) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.keep.click()
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "✓ Alpha Interface")]
+
+    tech = sample_install.workshop_dir / "2000000001/common/technology/b_alpha.txt"
+    tech.write_bytes(b"tech_x = {\n\tcost = 5\n}\n")
+    with qtbot.waitSignal(clashing.library_shown, timeout=10_000):
+        clashing.rescan()
+    with qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000):
+        conflicts.refresh_requested.emit()
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "⚠ Needs another look")]
+    assert "1 need another look" in conflicts.patch_label.text()
+
+    conflicts.state_box.setCurrentIndex(conflicts.state_box.findText("Needs another look"))
+    assert list(groups(conflicts)) == ["Technology (1)"]
+
+
+def test_clear_one_choice_or_all(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.keep.click()
+    conflicts.clear_button.click()
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "Alpha Interface")]
+
+    conflicts.keep.click()
+    select(conflicts, "interface/same.gui")
+    conflicts.use_left.click()
+    monkeypatch.setattr(conflicts, "confirm", lambda title, text: "all 2 choices" in text)
+    conflicts.clear_all_button.click()
+    assert conflicts.choices is not None and conflicts.choices.resolutions == ()
+    assert groups(conflicts) == {
+        "Technology (1)": [("tech_x", "Alpha Interface")],
+        "Whole files (1)": [("interface/same.gui", "My Local Tweaks")],
+    }
+
+
+def test_copying_a_playset_copies_its_choices(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.keep.click()
+    monkeypatch.setattr(clashing, "ask_text", lambda *args: "Copied")
+    clashing.copy_playset()
+    copied = clashing.selected_playset()
+    assert copied is not None and copied.name == "Copied"
+    assert len(clashing.choices_for(copied).resolutions) == 1
+
+
+def test_rows_use_the_themes_text_colour(qtbot: QtBot, clashing: MainWindow) -> None:
+    """Only identical or ignored rows get a colour of their own (grey)."""
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.keep.click()  # relabels the row
+    conflicts.clear_button.click()
+    item = conflicts.tree.currentItem()
+    assert item is not None
+    for col in range(3):
+        assert item.data(col, Qt.ItemDataRole.ForegroundRole) is None

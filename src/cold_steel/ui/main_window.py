@@ -40,14 +40,26 @@ from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
 from cold_steel.core.mods import Mod
+from cold_steel.core.patch import (
+    PatchError,
+    PatchPlan,
+    patch_key,
+    patches_dir,
+    plan_patch,
+    remove_patch,
+    with_patch_last,
+    write_patch,
+)
 from cold_steel.core.play import PlayError, PlayPlan, plan_play, play
 from cold_steel.core.playsets import PlaysetBook, missing_mods
+from cold_steel.core.resolve import ResolutionBook, copy_resolutions
 from cold_steel.core.share import ShareError, load_share_file, save_share_file
 from cold_steel.core.sync import SyncError, export_playset, import_playset
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
 from cold_steel.store.playsets import Playset, playsets_file
+from cold_steel.store.resolutions import resolutions_dir, resolutions_file
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
@@ -73,6 +85,8 @@ class MainWindow(QMainWindow):
     errors_read = Signal(object)
     # A playset's conflicts are on screen in the Conflicts window. For tests.
     conflicts_shown = Signal(object)
+    # The patch mod was written: its PatchPlan. For tests.
+    patch_generated = Signal(object)
 
     def __init__(
         self,
@@ -84,6 +98,8 @@ class MainWindow(QMainWindow):
         backup_dir: Path | None = None,
         health_cache: Path | None = None,
         index_cache: Path | None = None,
+        choices_dir: Path | None = None,
+        patch_dir: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
@@ -102,6 +118,10 @@ class MainWindow(QMainWindow):
         self._index: Index | None = None
         self._conflicts_window: ConflictsWindow | None = None
         self._conflicts_task: Task | None = None
+        self._choices_dir = choices_dir or resolutions_dir()
+        self._patch_dir = patch_dir or patches_dir()
+        self._choices: ResolutionBook | None = None  # the selected playset's
+        self._patch_task: Task | None = None
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -593,7 +613,9 @@ class MainWindow(QMainWindow):
         wanted = self.book.unused_name(f"{playset.name} (copy)")
         name = self.ask_text("Copy playset", "Name of the copy:", wanted)
         if name:
-            self._reload_playsets(self.book.copy(playset.id, name).id)
+            copy = self.book.copy(playset.id, name)
+            copy_resolutions(playset.id, copy.id, self._choices_dir)
+            self._reload_playsets(copy.id)
 
     def rename_playset(self) -> None:
         playset = self.selected_playset()
@@ -613,6 +635,9 @@ class MainWindow(QMainWindow):
             "The launcher's copy, if it has one, isn't touched.",
         ):
             self.book.delete(playset.id)
+            resolutions_file(playset.id, self._choices_dir).unlink(missing_ok=True)
+            if self.library is not None:
+                remove_patch(playset.id, self.library.game, self._patch_dir)
             self._reload_playsets("")
 
     def sort_mods(self) -> None:
@@ -842,6 +867,7 @@ class MainWindow(QMainWindow):
         if window is None:
             window = self._conflicts_window = ConflictsWindow(self.tasks, self)
             window.refresh_requested.connect(self._find_conflicts)
+            window.generate_requested.connect(self.generate_patch)
         self.show_dialog(window)
         self._find_conflicts(mod)
 
@@ -864,9 +890,11 @@ class MainWindow(QMainWindow):
         window.setWindowTitle(f"Conflicts in {playset.name}")
         cache, previous = self._index_cache, self._index
 
+        leave_out = frozenset({patch_key(playset.id)})
+
         def job(ctx: JobContext) -> tuple[Index, Found]:
             index = Indexer(library, cache, previous)(ctx)
-            return index, ConflictFinder(index, playset, library)(ctx)
+            return index, ConflictFinder(index, playset, library, leave_out=leave_out)(ctx)
 
         task = self.tasks.start(job)
         self._conflicts_task = task
@@ -881,8 +909,75 @@ class MainWindow(QMainWindow):
         index, found = result
         self._index = index
         names = {m.key: m.name for m in self.library.mods} if self.library else {}
-        self._conflicts_window.set_found(found, index, names, mod)
+        playset = self.selected_playset()
+        choices = self.choices_for(playset) if playset else None
+        self._conflicts_window.set_found(found, index, names, mod, choices)
         self.conflicts_shown.emit(found)
+
+    def choices_for(self, playset: Playset) -> ResolutionBook:
+        """The playset's conflict choices, opened once and kept while it's selected."""
+        path = resolutions_file(playset.id, self._choices_dir)
+        if self._choices is None or self._choices.path != path:
+            self._choices = ResolutionBook.open(path)
+            if self._choices.problems:
+                self.tell("Conflict choices", "\n".join(self._choices.problems))
+        return self._choices
+
+    # The patch mod
+
+    def generate_patch(self) -> None:
+        """Rebuild the playset's patch mod from its choices, then put it last."""
+        playset, library = self.selected_playset(), self.library
+        if playset is None or library is None or self._patch_task is not None:
+            return
+        choices = self.choices_for(playset)
+        resolutions = choices.resolutions  # a snapshot; the job runs on another thread
+        cache, previous, root = self._index_cache, self._index, self._patch_dir
+        leave_out = frozenset({patch_key(playset.id)})
+
+        def job(ctx: JobContext) -> PatchPlan:
+            index = Indexer(library, cache, previous)(ctx)
+            found = ConflictFinder(index, playset, library, leave_out=leave_out)(ctx)
+            ctx.progress(0, 0, "Writing the patch mod")
+            plan = plan_patch(found, resolutions, index)
+            write_patch(plan, playset, library.game, root)
+            return plan
+
+        task = self.tasks.start(job)
+        self._patch_task = task
+        task.progress.connect(self._show_progress)
+        task.succeeded.connect(lambda plan: self._patch_written(plan, playset, choices))
+        task.failed.connect(self._patch_failed)
+        task.finished.connect(self._patch_done)
+
+    def _patch_written(self, plan: PatchPlan, playset: Playset, choices: ResolutionBook) -> None:
+        choices.mark_built(plan.digest)
+        if self.book is not None and self.book.get(playset.id) is not None:
+            current = self.book.get(playset.id) or playset
+            self.book.update(with_patch_last(current))
+        text = (
+            f"The patch mod holds {len(plan.written)} choice(s). It's at the end of "
+            f"\u201c{playset.name}\u201d, so Play loads it last."
+        )
+        if plan.left_out:
+            text += f"\n\nLeft out, {len(plan.left_out)}:\n" + "\n".join(
+                f"{r.resolution.key}: {r.why}" for r in plan.left_out
+            )
+        self.statusBar().showMessage(f"Patch mod written for {playset.name}")
+        self.patch_generated.emit(plan)
+        # The scan finds the new mod, and refreshes the conflicts.
+        self.rescan()
+        self.tell("Patch mod", text)
+
+    def _patch_failed(self, error: Exception) -> None:
+        if isinstance(error, PatchError | OSError):
+            self.tell("Patch mod", f"The patch mod wasn't written: {error}")
+        else:
+            self.tell("Patch mod", f"Writing the patch mod failed: {type(error).__name__}: {error}")
+
+    def _patch_done(self) -> None:
+        self._patch_task = None
+        self.progress.hide()
 
     # Questions for the user. Tests replace these.
 
