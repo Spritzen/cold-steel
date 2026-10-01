@@ -10,14 +10,26 @@ A test ([test_layout.py](../../tests/test_layout.py)) fails if that breaks.
 src/cold_steel/
 ├── __main__.py      entry point: python -m cold_steel
 ├── core/            plain Python: finding mods, parsing, conflicts, building
-│   └── jobs.py      JobContext: progress reporting and cancelling for long jobs
+│   ├── jobs.py      JobContext: progress reporting and cancelling for long jobs
+│   ├── library.py   the scan job (Scanner) and what it returns (Library, Playset)
+│   ├── mods.py      reading one mod, using the cache; the Mod record
+│   └── version.py   is a mod outdated?
 ├── store/           our own data, plus the parse cache
-│   └── paths.py     where that data lives (XDG folders)
-├── paradox/         reading and writing Paradox files (launcher DB, .mod, dlc_load.json)
+│   ├── files.py     atomic msgspec save and load
+│   ├── paths.py     where that data lives (XDG folders)
+│   └── settings.py  settings.json
+├── paradox/         reading and writing Paradox and Steam files
+│   ├── game.py      finding Stellaris through Steam's libraries
+│   ├── descriptor.py  .mod files
+│   ├── launcher_db.py launcher-v2.sqlite, read-only
+│   ├── script.py    the Paradox script parser (Phase 4 grows it)
+│   └── vdf.py       Steam's .vdf files
 └── ui/              Qt windows and widgets. Calls into core, never the other way
     ├── app.py       creates the QApplication and shows the window
-    ├── main_window.py
-    └── tasks.py     TaskRunner: runs core jobs off the main thread
+    ├── main_window.py  playset sidebar, filters, mod table, status bar
+    ├── mod_table.py the table model and its search/filter proxy
+    ├── tasks.py     TaskRunner: runs core jobs off the main thread
+    └── thumbnails.py  loads and caches mod thumbnails off the main thread
 tests/               pytest and pytest-qt tests
 tools/               project scripts (check_links.py)
 ```
@@ -37,7 +49,8 @@ result. It calls `ctx.progress(done, total, message)` as it goes. That call
 also stops the job, by raising `Cancelled`, if someone has cancelled it.
 
 The window starts a job with `TaskRunner.start(job)`, which returns a `Task`.
-The task's signals arrive on the main thread:
+The task's signals are emitted on the main thread, from the event loop, so
+signals connected straight after `start()` never miss a result:
 
 | Signal | When |
 |---|---|
@@ -58,4 +71,4 @@ variable if set.
 |---|---|
 | `~/.config/cold-steel/` | settings |
 | `~/.local/share/cold-steel/` | playsets and patch-mod work |
-| `~/.cache/cold-steel/` | the parse cache. Safe to delete |
+| `~/.cache/cold-steel/` | the parse cache (`mods.msgpack`) and shrunk thumbnails. Safe to delete |

@@ -3,7 +3,21 @@
 import subprocess
 import sys
 
-QT_FREE = ["cold_steel", "cold_steel.core.jobs", "cold_steel.store.paths", "cold_steel.paradox"]
+QT_FREE = [
+    "cold_steel",
+    "cold_steel.core.jobs",
+    "cold_steel.core.library",
+    "cold_steel.core.mods",
+    "cold_steel.core.version",
+    "cold_steel.store.files",
+    "cold_steel.store.paths",
+    "cold_steel.store.settings",
+    "cold_steel.paradox.descriptor",
+    "cold_steel.paradox.game",
+    "cold_steel.paradox.launcher_db",
+    "cold_steel.paradox.script",
+    "cold_steel.paradox.vdf",
+]
 
 
 def test_core_packages_do_not_import_qt() -> None:

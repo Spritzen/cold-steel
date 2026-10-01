@@ -1,0 +1,19 @@
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"@ROOT@/home/.local/share/Steam"
+		"apps"
+		{
+			"8930"		"8274093310"
+		}
+	}
+	"1"
+	{
+		"path"		"@ROOT@/games"
+		"apps"
+		{
+			"281990"		"31427185891"
+		}
+	}
+}

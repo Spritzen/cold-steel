@@ -1,0 +1,9 @@
+{
+	"gameId": "stellaris",
+	"version": "Cygnus v4.5.1 (358e)",
+	"modsCompatibilityVersion": "4.5",
+	"rawVersion": "v4.5.1",
+	"distPlatform": "steam",
+	"gameDataPath": "$LINUX_DATA_HOME/Paradox Interactive/Stellaris",
+	"exePath": "./stellaris"
+}
