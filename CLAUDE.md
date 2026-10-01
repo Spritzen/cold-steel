@@ -14,6 +14,8 @@ features from our Stellaris mod project at `$STELLARIS_FRAMEWORK_DIR`.
 | know what we're building and what we're not | [docs/scope.md](docs/scope.md) |
 | know what to work on now | [docs/phases/README.md](docs/phases/README.md) |
 | check whether something is already decided | [docs/decisions.md](docs/decisions.md) |
+| run, test or lint the code | [docs/development.md](docs/development.md) |
+| see how the code is laid out | [docs/architecture/](docs/architecture/README.md) |
 | find where Stellaris keeps its files | [docs/reference/stellaris-files.md](docs/reference/stellaris-files.md) |
 | see everything else | [docs/README.md](docs/README.md) |
 

@@ -1,0 +1,39 @@
+# Project info and tool settings only. Packages come from pacman, not pip
+# (decision 2), so there are no dependency lists here.
+
+[project]
+name = "cold-steel"
+version = "0.0.1"
+description = "A native Linux mod manager for Stellaris"
+readme = "CLAUDE.md"
+license = "MIT"
+requires-python = ">=3.14"
+
+[project.scripts]
+cold-steel = "cold_steel.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "PTH"]
+
+[tool.mypy]
+strict = true
+mypy_path = "src"
+files = ["src", "tests", "tools"]
+explicit_package_bases = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+qt_api = "pyside6"
+
+# PySide6 ships .pyi stubs but no py.typed marker, so mypy must be told to use them.
+[[tool.mypy.overrides]]
+module = ["PySide6", "PySide6.*", "shiboken6", "shiboken6.*"]
+follow_untyped_imports = true

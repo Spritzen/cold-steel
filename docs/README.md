@@ -7,9 +7,10 @@
 | [phases/](phases/README.md) | The build plan: one file per phase, each with a "done when" checklist |
 | [reference/stellaris-files.md](reference/stellaris-files.md) | Where Stellaris, Steam and the launcher keep things, and what's inside |
 | [reference/from-stg.md](reference/from-stg.md) | The four tools we take from the Stellaris mod project, and what changes |
+| [architecture/](architecture/README.md) | How the code is laid out, how background work runs, where our data lives |
+| [development.md](development.md) | How to run, test and lint |
 
-New folders get added here when a phase needs them (for example
-`architecture/` in Phase 0). Don't create a folder until it has something in
+New folders get added here when a phase needs them. Don't create a folder until it has something in
 it.
 
 ## How we write docs
