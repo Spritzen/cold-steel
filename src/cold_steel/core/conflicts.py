@@ -242,17 +242,21 @@ def _next_rival(ordered: tuple[Claim, ...], winner: int, others: Iterable[int]) 
 
 
 def _localisation_winner(ordered: tuple[Claim, ...]) -> tuple[int, str]:
-    def rank(n: int) -> tuple[bool, bool, int]:
-        claim = ordered[n]
-        return ("/replace/" in claim.path.lower(), claim.layer != GAME, n)
+    """A key in a replace/ folder beats the rest; otherwise the first file name wins.
 
-    winner = max(range(len(ordered)), key=rank)
-    win = ordered[winner]
-    name = win.path.rpartition("/")[2]
-    if "/replace/" in win.path.lower():
-        why = f"It's in a replace/ folder, which beats other localisation. {name} sorts last."
-    else:
-        why = f"A mod's localisation beats the game's, and {name} sorts last."
-    if all(c.layer == win.layer or c.layer == GAME for c in ordered):
-        why = "A mod's localisation beats the game's."
-    return winner, why
+    Both checked in game on 2026-10-01. Which replace/ file wins when several
+    have the key isn't checked yet: the last name is assumed, as they override.
+    """
+    replacing = [n for n, c in enumerate(ordered) if "/replace/" in c.path.lower()]
+    if replacing:
+        winner = replacing[-1]
+        name = ordered[winner].path.rpartition("/")[2]
+        why = "It's in a replace/ folder, which beats other localisation."
+        if len(replacing) > 1:
+            why += f" Of the replace/ files, {name} sorts last (not yet checked in game)."
+        return winner, why
+    name = ordered[0].path.rpartition("/")[2]
+    return 0, (
+        "Outside replace/ folders the game keeps the first definition it reads, "
+        f"and it reads files in name order. {name} sorts first."
+    )

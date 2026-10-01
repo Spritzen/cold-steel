@@ -51,10 +51,10 @@ CHECKS = {
 # Localisation can't be logged, so it's shown in a window at the start of the game.
 POPUP = """\
 The window "Cold Steel live check" should read:
-  title: "replace/ in A wins"   (localisation: replace/ beats the rest)
-  text:  "zz file in A wins"    (localisation: last file name wins)
-If it says "B" anywhere, the localisation rule is wrong. Load order alone would
-give "B outside replace/ wins" and "aa file in B wins".
+  title:  "replace/ in A wins"              (replace/ beats the rest)
+  text:   "aa file in B wins"               (outside replace/, the first name wins)
+  button: "aa file in A: first name wins"   (the name decides, not the load order)
+All three were seen on 2026-10-01. Anything else means the localisation rule changed.
 """
 
 
@@ -106,13 +106,16 @@ def files() -> dict[str, dict[str, str]]:
                 "\t}\n}\n"
                 "country_event = {\n"
                 "\tid = cs_live_a.2\n\ttitle = cs_live_loc_replace\n\tdesc = cs_live_loc_name\n"
-                "\tis_triggered_only = yes\n\toption = { name = OK }\n}\n"
+                "\tis_triggered_only = yes\n\toption = { name = cs_live_loc_order }\n}\n"
             ),
             "localisation/english/replace/cs_live_a_l_english.yml": (
                 f'{BOM}l_english:\n cs_live_loc_replace:0 "replace/ in A wins"\n'
             ),
             "localisation/english/zz_cs_live_a_l_english.yml": (
                 f'{BOM}l_english:\n cs_live_loc_name:0 "zz file in A wins"\n'
+            ),
+            "localisation/english/aa_cs_live_order_a_l_english.yml": (
+                f'{BOM}l_english:\n cs_live_loc_order:0 "aa file in A: first name wins"\n'
             ),
         },
         "b": {
@@ -141,6 +144,9 @@ def files() -> dict[str, dict[str, str]]:
             ),
             "localisation/english/aa_cs_live_b_l_english.yml": (
                 f'{BOM}l_english:\n cs_live_loc_name:0 "aa file in B wins"\n'
+            ),
+            "localisation/english/zz_cs_live_order_b_l_english.yml": (
+                f'{BOM}l_english:\n cs_live_loc_order:0 "zz file in B: later mod wins"\n'
             ),
         },
     }
@@ -175,7 +181,7 @@ def install(game: Game) -> None:
         "1. Rescan in Cold Steel, then make a playset with Cold Steel Live A first, "
         "then Cold Steel Live B. Nothing else.\n"
         "2. Play, and start a new game (any empire, the smallest galaxy).\n"
-        "3. Note what the 'Cold Steel live check' window says, then quit.\n"
+        "3. Note what the 'Cold Steel live check' window says, button included, then quit.\n"
         "4. Run: python3 tools/live_rules.py check\n"
     )
 

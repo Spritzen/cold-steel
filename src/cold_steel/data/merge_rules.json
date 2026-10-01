@@ -12,16 +12,16 @@
     "last": "The definition in the file whose name sorts last wins",
     "first": "The definition in the file whose name sorts first wins",
     "merged": "The game combines every definition, so they never clash",
-    "localisation": "A key in a replace/ folder beats one outside it. Then a mod's beats the game's, then the file whose name sorts last wins"
+    "localisation": "A key in a replace/ folder beats one outside it. Outside replace/, the file whose name sorts first wins, mod or game. Among replace/ files the last name is assumed to win (not checked)"
   },
-  "default": {"winner": "last", "unit": "key", "source": "Irony"},
+  "default": {"winner": "last", "unit": "key", "source": "Irony", "checked": "2026-10-01"},
   "rules": [
     {"folder": "common/component_sets", "winner": "first", "source": "Irony"},
     {"folder": "common/component_templates", "winner": "first", "source": "Irony"},
     {"folder": "common/event_chains", "winner": "first", "source": "Irony"},
     {"folder": "common/global_ship_designs", "winner": "first", "source": "Irony"},
     {"folder": "common/governments/authorities", "winner": "first", "source": "Irony"},
-    {"folder": "common/scripted_variables", "winner": "first", "source": "Irony"},
+    {"folder": "common/scripted_variables", "winner": "first", "source": "Irony", "checked": "2026-10-01"},
     {"folder": "common/section_templates", "winner": "first", "source": "Irony"},
     {"folder": "common/ship_behaviors", "winner": "first", "source": "Irony"},
     {"folder": "common/solar_system_initializers", "winner": "first", "source": "Irony"},
@@ -29,10 +29,10 @@
     {"folder": "common/start_screen_messages", "winner": "first", "unit": "file", "source": "Irony"},
     {"folder": "common/strategic_resources", "winner": "first", "source": "Irony"},
     {"folder": "common/traits", "winner": "first", "source": "Irony"},
-    {"folder": "events", "winner": "first", "unit": "field", "field": "id", "source": "Irony"},
+    {"folder": "events", "winner": "first", "unit": "field", "field": "id", "source": "Irony", "checked": "2026-10-01"},
 
     {"folder": "common/defines", "unit": "define", "source": "Irony"},
-    {"folder": "common/on_actions", "winner": "merged", "source": "Stellaris modding wiki"},
+    {"folder": "common/on_actions", "winner": "merged", "source": "Stellaris modding wiki", "checked": "2026-10-01"},
 
     {"folder": "common/component_tags", "unit": "file", "source": "Irony"},
     {"folder": "common/country_container", "unit": "file", "source": "Irony"},
@@ -54,7 +54,7 @@
 
     {"folder": "gfx", "unit": "name", "source": "Irony"},
     {"folder": "interface", "unit": "name", "source": "Irony"},
-    {"folder": "localisation", "winner": "localisation", "unit": "localisation", "source": "Irony"},
-    {"folder": "localisation_synced", "winner": "localisation", "unit": "localisation", "source": "Irony"}
+    {"folder": "localisation", "winner": "localisation", "unit": "localisation", "source": "Irony, corrected by a live run", "checked": "2026-10-01"},
+    {"folder": "localisation_synced", "winner": "localisation", "unit": "localisation", "source": "Irony, corrected by a live run"}
   ]
 }
