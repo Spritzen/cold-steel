@@ -113,3 +113,41 @@ own.
 [MIT](LICENSE). Cold Steel is inspired by
 [IronyModManager](https://github.com/bcssov/IronyModManager), which does the
 same job on Windows.
+
+## Add a desktop icon
+
+To start Cold Steel from your desktop or app menu instead of a terminal, run
+these commands inside the `cold-steel` folder.
+
+These steps are for **Arch Linux with the KDE Plasma desktop** (tested on
+CachyOS with Plasma). They use the standard Linux desktop file format, so
+GNOME, Xfce and other desktops should work too, but we haven't tested them.
+
+```sh
+install -Dm644 src/cold_steel/data/cold-steel.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/cold-steel.svg
+
+mkdir -p ~/.local/share/applications
+cat > ~/.local/share/applications/cold-steel.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Cold Steel
+GenericName=Stellaris Mod Manager
+Comment=Manage Stellaris mods and playsets
+Exec=env PYTHONPATH=$PWD/src python3 -m cold_steel
+Path=$PWD
+Icon=cold-steel
+Terminal=false
+Categories=Game;
+StartupWMClass=cold-steel
+EOF
+
+install -Dm755 ~/.local/share/applications/cold-steel.desktop ~/Desktop/cold-steel.desktop
+```
+
+Cold Steel now shows up under **Games** in your app menu and as an icon on
+your desktop. The first time you double-click the desktop icon, your desktop
+may ask whether to trust it. Choose **Allow launching**.
+
+If you move the `cold-steel` folder later, run the commands again from its
+new place.
