@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-# GUI tests run headless unless asked otherwise (`QT_QPA_PLATFORM=wayland make test`).
+# GUI tests run headless unless asked otherwise (`COLD_STEEL_TEST_QPA=wayland make test`).
 os.environ["QT_QPA_PLATFORM"] = os.environ.get("COLD_STEEL_TEST_QPA", "offscreen")
 
 FIXTURES = Path(__file__).parent / "fixtures"

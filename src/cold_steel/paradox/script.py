@@ -1,5 +1,5 @@
 """A parser for Paradox script: the `key = value` and `key = { ... }` format used by
-`.mod` descriptors and, later, by every game file.
+`.mod` descriptors and by every game file.
 
     name="UI Overhaul Dynamic"
     tags={

@@ -7,7 +7,8 @@ file is written.
 
 Mods are read one after another. Checking timestamps is Python work that holds
 the GIL, so threads made it slower (0.28 s alone, 0.42 s with 8 threads, on
-55 mods / 72,000 files). Phase 4's parsing is where parallel work pays.
+55 mods / 72,000 files). Parsing for conflicts (index.py) is where parallel
+work pays.
 """
 
 import os
