@@ -1,4 +1,4 @@
-# Day-to-day commands. `make check` runs everything CI would.
+# Day-to-day commands. `make check` must pass before merging.
 
 PY      := python3
 export PYTHONPATH := src

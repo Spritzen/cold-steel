@@ -7,8 +7,8 @@ Paradox launcher, all in one fast window. It's built for the native Linux
 version of the game, so there's no Wine or Proton involved.
 
 > **Early days.** Cold Steel can build playsets, start the game with them,
-> show you which mods are broken, and show where mods clash. It backs up every
-> Paradox file before it changes one.
+> show you which mods are broken, and show and fix where mods clash. It backs
+> up every Paradox file before it changes one.
 
 ## What it does today
 
@@ -160,7 +160,8 @@ new place.
 
 ## Licence
 
-[MIT](LICENSE). 
+[MIT](LICENSE).
 
 Cold Steel is inspired by
-[IronyModManager](https://github.com/bcssov/IronyModManager), which was the manager i used for years on Windows. Big props to Mario!
+[IronyModManager](https://github.com/bcssov/IronyModManager), which was the
+manager I used for years on Windows. Big props to Mario!

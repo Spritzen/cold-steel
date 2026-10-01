@@ -1,7 +1,7 @@
 """Reads and writes playsets in the Paradox launcher's `launcher-v2.sqlite`.
 
 Reading opens the file with SQLite's `mode=ro`, so it can't change anything.
-Writing (`write_playset`) backs the file up first (rule 1 in CLAUDE.md), and
+Writing (`write_playset`) backs the file up first (decision 6), and
 changes only the one playset it was given. Don't call it while the launcher
 is running: the launcher keeps its own copy of the data in memory.
 """

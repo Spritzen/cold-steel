@@ -24,5 +24,6 @@ def data_dir() -> Path:
 
 
 def cache_dir() -> Path:
-    """The parse cache. Safe to delete. `~/.cache/cold-steel/`."""
+    """Caches: mods, health results, the object index, thumbnails. Safe to delete.
+    `~/.cache/cold-steel/`."""
     return _xdg("XDG_CACHE_HOME", ".cache")

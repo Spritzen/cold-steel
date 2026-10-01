@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
         self._health_cache = health_cache or paths.cache_dir() / "health.msgpack"
         self._errors_dialog: ErrorsDialog | None = None
         self._index_cache = index_cache or paths.cache_dir() / "index"
-        # Kept between searches, so unchanged mods aren't even loaded from the cache again.
+        # Kept between conflict scans, so unchanged mods aren't even loaded from the cache again.
         self._index: Index | None = None
         self._conflicts_window: ConflictsWindow | None = None
         self._conflicts_task: Task | None = None
