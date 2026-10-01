@@ -1,7 +1,9 @@
 # Cold Steel
 
 A native Linux mod manager for **Stellaris**, written in Python + Qt 6
-(PySide6). It replaces and improves on
+(PySide6). Repo: [Spritzen/cold-steel](https://github.com/Spritzen/cold-steel).
+
+It replaces and improves on
 [IronyModManager](https://github.com/bcssov/IronyModManager), and borrows four
 features from our Stellaris mod project at `$STELLARIS_FRAMEWORK_DIR`.
 

@@ -15,7 +15,7 @@ and it looks and behaves like a finished app.
 - [ ] Keyboard shortcuts for common actions, listed in the help
 - [ ] First-run screen explains what the app will and won't touch
 - [ ] User guide in the repo `README.md`, with screenshots
-- [ ] Published to the AUR, and the GitHub repo made public
+- [ ] Published to the AUR
 
 ## What it contains
 
@@ -31,5 +31,4 @@ turns up here gets its own phase instead.
 
 | Question | Recommendation |
 |---|---|
-| Licence? | MIT, the same as Irony, which also lets us use Irony's rules data |
 | Compile slow modules with mypyc in the package? | Only if Phase 4 benchmarks needed it. Otherwise ship plain Python (simpler package) |
