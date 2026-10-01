@@ -16,6 +16,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QFont, QImage, QPixmap
 
+from cold_steel.core.health import Health, Status, status
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
 from cold_steel.store.playsets import Playset
@@ -26,21 +27,25 @@ MOD_ROLE = Qt.ItemDataRole.UserRole  # the Mod itself
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
 WARNING = QColor("#d9534f")
+CAUTION = QColor("#c08a00")
+HEALTHY = QColor("#3c9a3c")
 MIME_TYPE = "application/x-cold-steel-mod-keys"
 
 
 class Column(IntEnum):
     POSITION = 0
     NAME = 1
-    VERSION = 2
-    SUPPORTED = 3
-    TAGS = 4
-    SOURCE = 5
+    HEALTH = 2
+    VERSION = 3
+    SUPPORTED = 4
+    TAGS = 5
+    SOURCE = 6
 
 
 HEADERS = {
     Column.POSITION: "#",
     Column.NAME: "Name",
+    Column.HEALTH: "Health",
     Column.VERSION: "Version",
     Column.SUPPORTED: "Made for",
     Column.TAGS: "Tags",
@@ -59,6 +64,7 @@ class ModTableModel(QAbstractTableModel):
         self._thumbnails: dict[str, QPixmap] = {}
         self._blank = QPixmap()  # shown until, or instead of, a thumbnail
         self._positions: dict[str, tuple[int, bool]] = {}  # key -> (position, enabled)
+        self._health: dict[str, Health] | None = None  # None while being checked
 
     def set_library(self, library: Library, missing: Sequence[Mod] = ()) -> None:
         """`missing`: stand-ins for playset mods that aren't installed."""
@@ -94,6 +100,22 @@ class ModTableModel(QAbstractTableModel):
                 self.index(len(self._mods) - 1, col),
                 [Qt.ItemDataRole.DecorationRole],
             )
+
+    def set_health(self, health: dict[str, Health] | None) -> None:
+        """Each mod's problems, or None while they're being checked."""
+        self._health = health
+        if self._mods:
+            col = Column.HEALTH
+            self.dataChanged.emit(self.index(0, col), self.index(len(self._mods) - 1, col))
+
+    def health(self, mod: Mod) -> Health:
+        return self._health.get(mod.key, ()) if self._health else ()
+
+    def health_status(self, mod: Mod) -> Status | None:
+        """None while checking, or for a mod that isn't installed."""
+        if self._health is None or mod.key not in self._health:
+            return None
+        return status(self._health[mod.key])
 
     def mod_at(self, row: int) -> Mod:
         return self._mods[row]
@@ -176,6 +198,10 @@ class ModTableModel(QAbstractTableModel):
                 return WARNING
             if col == Column.NAME and mod.problem:
                 return WARNING
+            if col == Column.HEALTH:
+                return {"error": WARNING, "warning": CAUTION, "ok": HEALTHY, None: None}[
+                    self.health_status(mod)
+                ]
             if not mod.installed or (position and not position[1]):
                 return QColor(Qt.GlobalColor.gray)
         if role == Qt.ItemDataRole.FontRole and not mod.installed:
@@ -196,6 +222,8 @@ class ModTableModel(QAbstractTableModel):
                 return position[0] if sort else str(position[0] + 1)
             case Column.NAME:
                 return mod.name.casefold() if sort else mod.name
+            case Column.HEALTH:
+                return self._health_text(mod, sort=sort)
             case Column.VERSION:
                 return mod.version
             case Column.SUPPORTED:
@@ -207,7 +235,30 @@ class ModTableModel(QAbstractTableModel):
                     return "Not installed"
                 return "Workshop" if mod.source == "workshop" else "Local"
 
+    def _health_text(self, mod: Mod, *, sort: bool) -> Any:
+        if self._health is None:
+            return 1 << 30 if sort else ("…" if mod.installed else "")
+        if mod.key not in self._health:
+            return 1 << 30 if sort else ""
+        errors, warnings = _counts(self._health[mod.key])
+        if sort:  # errors first, then warnings, then OK
+            return -(errors * 100_000 + warnings)
+        if errors:
+            return f"{errors} error{'s' if errors > 1 else ''}"
+        if warnings:
+            return f"{warnings} warning{'s' if warnings > 1 else ''}"
+        return "OK"
+
     def _tooltip(self, mod: Mod, col: Column, position: tuple[int, bool] | None) -> str | None:
+        if col == Column.HEALTH:
+            if self._health is None:
+                return "Checking this mod's files…" if mod.installed else None
+            if mod.key not in self._health:
+                return None
+            errors, warnings = _counts(self._health[mod.key])
+            if not errors and not warnings:
+                return "No problems found."
+            return f"{errors} error(s), {warnings} warning(s). Click to see them."
         if col == Column.SUPPORTED and self.is_outdated(mod) and self._library:
             return f"Made for {mod.supported_version}. The game is {self._library.game.version}."
         if col == Column.NAME:
@@ -221,6 +272,11 @@ class ModTableModel(QAbstractTableModel):
             lines.append(mod.root or mod.archive or mod.key)
             return "\n".join(lines)
         return None
+
+
+def _counts(issues: Health) -> tuple[int, int]:
+    errors = sum(i.severity == "error" for i in issues)
+    return errors, len(issues) - errors
 
 
 class Membership(IntEnum):
@@ -248,6 +304,7 @@ class ModFilter(QSortFilterProxyModel):
         self._text = ""
         self._tag = ""
         self._outdated_only = False
+        self._problems_only = False
         self._membership = Membership.ANY
         self._playset: frozenset[str] | None = None  # None: the full list
         self._in_any_playset: frozenset[str] = frozenset()
@@ -295,6 +352,11 @@ class ModFilter(QSortFilterProxyModel):
         self._outdated_only = on
         self.endFilterChange()
 
+    def set_problems_only(self, on: bool) -> None:
+        self.beginFilterChange()
+        self._problems_only = on
+        self.endFilterChange()
+
     def set_membership(self, membership: Membership) -> None:
         self.beginFilterChange()
         self._membership = membership
@@ -318,6 +380,8 @@ class ModFilter(QSortFilterProxyModel):
         if self._tag and self._tag not in mod.tags:
             return False
         if self._outdated_only and not self._model.is_outdated(mod):
+            return False
+        if self._problems_only and self._model.health_status(mod) in ("ok", None):
             return False
         if self._membership == Membership.IN_A_PLAYSET:
             return mod.key in self._in_any_playset

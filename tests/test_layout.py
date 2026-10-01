@@ -5,6 +5,8 @@ import sys
 
 QT_FREE = [
     "cold_steel",
+    "cold_steel.core.errors",
+    "cold_steel.core.health",
     "cold_steel.core.jobs",
     "cold_steel.core.library",
     "cold_steel.core.load_order",
@@ -22,6 +24,7 @@ QT_FREE = [
     "cold_steel.paradox.descriptor",
     "cold_steel.paradox.dlc",
     "cold_steel.paradox.dlc_load",
+    "cold_steel.paradox.error_log",
     "cold_steel.paradox.game",
     "cold_steel.paradox.launcher_db",
     "cold_steel.paradox.processes",

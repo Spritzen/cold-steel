@@ -6,9 +6,9 @@ Cold Steel shows every mod you have installed and the playsets you made in the
 Paradox launcher, all in one fast window. It's built for the native Linux
 version of the game, so there's no Wine or Proton involved.
 
-> **Early days.** Cold Steel can show your mods and playsets, but it can't
-> change them yet. It only reads your files, so it's safe to try alongside
-> the Paradox launcher.
+> **Early days.** Cold Steel can build playsets, start the game with them, and
+> show you which mods are broken. It backs up every Paradox file before it
+> changes one.
 
 ## What it does today
 
@@ -21,15 +21,21 @@ version of the game, so there's no Wine or Proton involved.
 - **Shows your playsets.** The playsets from the Paradox launcher, in the same
   order, with each playset's mods in load order. It also tells you if a
   playset includes a mod you've since unsubscribed from.
-- **Search and filter.** By name or tag, outdated mods only, or mods that
-  are or aren't in a playset.
+- **Make and edit playsets.** Drag mods into load order, turn them on and
+  off, choose DLC, then press **Play** to start the game with that playset.
+  You can import playsets from the launcher and export them back.
+- **Spots broken mods.** Each mod gets a health badge. Click it to see each
+  problem, with the file and line: a localisation file the game will ignore,
+  a line it will skip, a stray `}` that cuts a file short.
+- **Shows which mod caused each error.** After you play, **Errors** reads the
+  game's `error.log` and groups the errors by the mod they came from.
+- **Search and filter.** By name or tag, outdated mods only, mods with
+  problems, or mods that are or aren't in a playset.
 - **Opens quickly.** It remembers what it has already read, so with 50+ mods
   the list appears in about half a second.
 
 ## Coming next
 
-- Make and edit playsets, and start the game with one
-- Spot broken mods before you play, and see which mod caused an error after
 - See where mods clash, and fix the clashes with a small patch mod
 - Pin mod versions, and merge a whole playset into one mod
 - An Arch package you can install with pacman
@@ -72,16 +78,17 @@ properties.
 
 ## Your files are safe
 
-Cold Steel never changes Steam's folders, your mods, or the Paradox launcher's
-files. It only writes its own files:
+Cold Steel never changes Steam's folders or your mods. It changes Paradox's
+files only when you ask: **Play** writes `dlc_load.json` (and a `.mod` file
+for a mod the launcher hasn't seen yet), and **Export to launcher** writes the
+launcher's playsets. Each file is backed up first, and
+nothing is written while the launcher or the game is open.
 
 | Folder | What's in it |
 |---|---|
 | `~/.config/cold-steel/` | Your settings |
+| `~/.local/share/cold-steel/` | Your playsets, and backups of the Paradox files |
 | `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
-
-When playset editing arrives, Cold Steel will back up the launcher's playsets
-before it changes anything.
 
 ## For developers
 

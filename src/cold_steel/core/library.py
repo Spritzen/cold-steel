@@ -11,6 +11,7 @@ the GIL, so threads made it slower (0.28 s alone, 0.42 s with 8 threads, on
 """
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from cold_steel.core.mods import (
     CachedMod,
     Mod,
     ModSource,
+    Stamp,
     read_mod,
     read_outer,
 )
@@ -40,7 +42,7 @@ from cold_steel.store.playsets import Playset, PlaysetEntry
 from cold_steel.store.settings import Settings
 
 # Bump when Mod or CachedMod change shape, so old caches are thrown away.
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 class CacheData(msgspec.Struct):
@@ -58,6 +60,11 @@ class Library:
     launcher_playsets: tuple[Playset, ...] = ()
     launcher_active: str = ""  # the id of the launcher's active playset
     problems: tuple[str, ...] = ()  # things that stopped part of the scan
+    # Every file in each installed mod, by Mod.key: path inside the mod -> Stamp.
+    # A zipped mod lists only its zip.
+    files: Mapping[str, Mapping[str, Stamp]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
     _outdated: dict[str, bool] = field(default_factory=dict, compare=False, repr=False)
 
     def is_outdated(self, mod: Mod) -> bool:
@@ -119,6 +126,7 @@ def scan_library(ctx: JobContext, game: Game, cache_file: Path) -> Library:
         launcher_playsets=tuple(_match_playsets(launcher.playsets, installed, dlcs)),
         launcher_active=next((p.id for p in launcher.playsets if p.active), ""),
         problems=tuple(problems),
+        files={key: entry.files for key, entry in mods.items()},
     )
 
 
