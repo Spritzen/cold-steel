@@ -214,6 +214,31 @@ def test_localisation_replace_folder_wins(sample_install: SampleInstall) -> None
     ]
 
 
+def test_localisation_outside_replace_keeps_the_first_file_name(
+    sample_install: SampleInstall,
+) -> None:
+    # Seen in game on 2026-10-01: the aa_ file won, though its mod loaded first.
+    def loc(text: bytes) -> bytes:
+        return BOM + b'l_english:\n KEY:0 "' + text + b'"\n'
+
+    write(
+        sample_install,
+        {
+            GAME: {"localisation/english/mm_l_english.yml": loc(b"game")},
+            ALPHA: {"localisation/english/aa_alpha_l_english.yml": loc(b"alpha")},
+            BETA: {"localisation/english/zz_beta_l_english.yml": loc(b"beta")},
+        },
+    )
+    key = conflict(find(sample_install, ALPHA, BETA), "localisation", "KEY")
+    assert key.winning.layer == ALPHA
+    assert "aa_alpha_l_english.yml sorts first" in key.reason
+
+    # No special case for the game: its file name decides too.
+    write(sample_install, {GAME: {"localisation/english/00_l_english.yml": loc(b"game")}})
+    key = conflict(find(sample_install, ALPHA, BETA), "localisation", "KEY")
+    assert key.winning.layer == GAME
+
+
 def test_identical_definitions_are_marked(sample_install: SampleInstall) -> None:
     write(
         sample_install,

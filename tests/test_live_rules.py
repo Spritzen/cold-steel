@@ -52,9 +52,10 @@ def test_our_finder_predicts_what_the_live_run_expects(sample_install: SampleIns
         assert key in winners, key
         assert said.endswith(letter[winners[key]]) or f"in {letter[winners[key]]}" in said, key
 
-    # Localisation: what the window at the start of the game should show.
-    assert winners["localisation", "cs_live_loc_replace"] == A
-    assert winners["localisation", "cs_live_loc_name"] == A
+    # Localisation: what the window at the start of the game showed on 2026-10-01.
+    assert winners["localisation", "cs_live_loc_replace"] == A  # title: replace/ wins
+    assert winners["localisation", "cs_live_loc_name"] == B  # text: B's aa_ file
+    assert winners["localisation", "cs_live_loc_order"] == A  # button: A's aa_ file
     # on_actions are merged, so both mods' events run.
     assert ("common/on_actions", "on_game_start_country") not in winners
 

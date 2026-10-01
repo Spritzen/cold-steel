@@ -6,9 +6,9 @@ Cold Steel shows every mod you have installed and the playsets you made in the
 Paradox launcher, all in one fast window. It's built for the native Linux
 version of the game, so there's no Wine or Proton involved.
 
-> **Early days.** Cold Steel can build playsets, start the game with them, and
-> show you which mods are broken. It backs up every Paradox file before it
-> changes one.
+> **Early days.** Cold Steel can build playsets, start the game with them,
+> show you which mods are broken, and show where mods clash. It backs up every
+> Paradox file before it changes one.
 
 ## What it does today
 
@@ -29,6 +29,12 @@ version of the game, so there's no Wine or Proton involved.
   a line it will skip, a stray `}` that cuts a file short.
 - **Shows which mod caused each error.** After you play, **Errors** reads the
   game's `error.log` and groups the errors by the mod they came from.
+- **Shows where mods clash.** Press **Conflicts** to see every place two mods
+  change the same file or the same thing in the game, like a technology, an
+  event or a line of text. It tells you which mod wins and why, and shows the
+  versions side by side with the differences highlighted. You can search for
+  anything in the playset by name. The rules for who wins were checked
+  against the game itself.
 - **Search and filter.** By name or tag, outdated mods only, mods with
   problems, or mods that are or aren't in a playset.
 - **Opens quickly.** It remembers what it has already read, so with 50+ mods
@@ -36,7 +42,7 @@ version of the game, so there's no Wine or Proton involved.
 
 ## Coming next
 
-- See where mods clash, and fix the clashes with a small patch mod
+- Fix clashes with a small patch mod
 - Pin mod versions, and merge a whole playset into one mod
 - An Arch package you can install with pacman
 

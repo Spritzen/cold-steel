@@ -503,7 +503,7 @@ def test_a_conflict_is_shown_side_by_side(qtbot: QtBot, clashing: MainWindow) ->
     assert pair.left.changed == pair.right.changed == frozenset({1})
     assert "Alpha Interface</b> wins" in conflicts.reason.text()
     assert "b_alpha.txt sorts last" in conflicts.reason.text()
-    assert "not yet checked in game" in conflicts.rule.text()
+    assert "checked in game on 2026-10-01" in conflicts.rule.text()
     assert conflicts.right_box.currentText().startswith("★ Alpha Interface")
     assert conflicts.viewer.right.toPlainText() == pair.right.text
 
