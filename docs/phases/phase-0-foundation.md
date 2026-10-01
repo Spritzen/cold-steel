@@ -1,20 +1,20 @@
 # Phase 0: Foundation
 
-**Status:** In progress
+**Status:** Done
 **Result:** An empty Cold Steel window opens, and one command runs every check.
 
 ## Done when
 
 - [x] Git repo created and pushed to GitHub
       ([Spritzen/cold-steel](https://github.com/Spritzen/cold-steel), branch `main`)
-- [ ] `.gitignore` added, and `.directory` (a KDE folder-view file,
+- [x] `.gitignore` added, and `.directory` (a KDE folder-view file,
       committed by accident) removed from the repo
-- [ ] A licence file is committed (see open questions)
-- [ ] Running the app opens an empty Cold Steel window on the desktop
-- [ ] `make check` runs ruff, mypy and pytest, and passes
-- [ ] One GUI test (pytest-qt) opens and closes the window
-- [ ] `docs/architecture/README.md` exists and shows the code layout below
-- [ ] A dev guide says how to run, test and lint
+- [x] A licence file is committed (MIT, [decision 12](../decisions.md))
+- [x] Running the app opens an empty Cold Steel window on the desktop
+- [x] `make check` runs ruff, mypy and pytest, and passes
+- [x] One GUI test (pytest-qt) opens and closes the window
+- [x] [docs/architecture/README.md](../architecture/README.md) exists and shows the code layout below
+- [x] A [dev guide](../development.md) says how to run, test and lint
 
 ## What it contains
 
@@ -44,8 +44,5 @@ blocks the window ([decision 9](../decisions.md)).
 
 ## Open questions
 
-| Question | Recommendation |
-|---|---|
-| Where does Cold Steel keep its own data? | XDG paths: `~/.config/cold-steel/` for settings, `~/.local/share/cold-steel/` for playsets and the patch-mod work, `~/.cache/cold-steel/` for the parse cache (safe to delete) |
-| Licence? (Moved here from Phase 7. The repo is already public, and without a licence nobody else may legally use the code) | MIT, the same as Irony, which also lets us use Irony's rules data |
-| Add a docs link checker like STG's `check_docs.py`? | Yes, but a small one: just "does every link resolve", run by `make check` |
+None. The three questions here became decisions
+[11–13](../decisions.md).
