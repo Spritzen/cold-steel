@@ -16,3 +16,8 @@ dist/
 .vscode/
 .idea/
 .directory
+
+# Kept locally, not in the repo
+.devcontainer/
+docs/
+CLAUDE.md
