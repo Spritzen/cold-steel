@@ -5,11 +5,14 @@ A mod is re-read only when one of its files changed size or timestamp
 the descriptor files changed.
 """
 
+import contextlib
 import os
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from types import TracebackType
+from typing import Literal, Self
 
 import msgspec
 import xxhash
@@ -39,6 +42,7 @@ class Mod(msgspec.Struct, frozen=True):
     remote_file_id: str = ""
     descriptor_file: str = ""  # the mod/*.mod file the game reads, if there is one
     problem: str = ""  # why the descriptor couldn't be read
+    named: bool = True  # False when the descriptor has no name, so `name` is made up
     installed: bool = True  # False for a playset entry whose mod is gone
 
 
@@ -115,6 +119,7 @@ def read_mod(src: ModSource, cached: CachedMod | None) -> CachedMod:
         key=src.key,
         source=src.source,
         name=desc.name or fallback_name,
+        named=bool(desc.name),
         version=desc.version,
         supported_version=desc.supported_version,
         tags=desc.tags,
@@ -145,6 +150,54 @@ def read_picture(mod: Mod) -> bytes | None:
         return Path(mod.picture).read_bytes()
     except OSError, KeyError, zipfile.BadZipFile:
         return None
+
+
+class ModFiles:
+    """A mod's files, read from its folder or from inside its zip.
+
+    with ModFiles(mod, library.files[mod.key]) as files:
+        for name in files.names():
+            data = files.read(name)
+    """
+
+    def __init__(self, mod: Mod, stamps: Mapping[str, Stamp]) -> None:
+        self._root = Path(mod.root) if mod.root and not mod.archive else None
+        self._stamps = stamps
+        self._zip: zipfile.ZipFile | None = None
+        if mod.archive:
+            with contextlib.suppress(OSError, zipfile.BadZipFile):
+                self._zip = zipfile.ZipFile(mod.archive)
+
+    def names(self) -> list[str]:
+        """Every file, by path inside the mod, sorted."""
+        if self._zip:
+            return sorted(n for n in self._zip.namelist() if not n.endswith("/"))
+        return sorted(self._stamps) if self._root else []
+
+    def read(self, name: str) -> bytes | None:
+        try:
+            if self._zip:
+                return self._zip.read(name)
+            if self._root:
+                return (self._root / name).read_bytes()
+        except OSError, KeyError, zipfile.BadZipFile:
+            pass
+        return None
+
+    def close(self) -> None:
+        if self._zip:
+            self._zip.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
 
 def _decode(data: bytes, label: str) -> tuple[Descriptor, str]:

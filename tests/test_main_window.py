@@ -32,7 +32,8 @@ def window(qtbot: QtBot, sample_install: SampleInstall, tmp_path: Path) -> MainW
         backup_dir=tmp_path / "data/backups",
     )
     qtbot.addWidget(win)
-    with qtbot.waitSignal(win.library_shown, timeout=10_000):
+    # The health check starts once the mods are on screen.
+    with qtbot.waitSignals([win.library_shown, win.health_shown], timeout=10_000):
         win.show()
     return win
 
@@ -52,7 +53,7 @@ def test_lists_mods_and_game_version(window: MainWindow) -> None:
         "My Local Tweaks",
     ]
     assert window.game_label.text() == "Stellaris Cygnus v4.5.1 (358e)"
-    assert window.statusBar().currentMessage() == "5 mods, 2 outdated"
+    assert window.statusBar().currentMessage() == "5 mods, 2 outdated, 1 with broken files"
 
 
 def test_sidebar_shows_playsets_in_launcher_order(window: MainWindow) -> None:
@@ -291,3 +292,119 @@ def test_import_from_launcher(window: MainWindow) -> None:
     assert window.library is not None
     window.import_from_launcher(window.library.launcher_playsets[1])
     assert sidebar(window)[-1] == "Second Playset (2) (1)"
+
+
+# Phase 3: health and errors
+
+
+def health_badges(window: MainWindow) -> dict[str, str]:
+    table = window.filter
+    return {
+        table.index(r, Column.NAME).data(): table.index(r, Column.HEALTH).data()
+        for r in range(table.rowCount())
+    }
+
+
+def test_each_mod_shows_a_health_badge(window: MainWindow) -> None:
+    assert health_badges(window) == {
+        "Alpha Interface": "OK",
+        "Beta Ships": "2 warnings",  # "3.*": unreadable, and outdated
+        "broken": "1 error",  # its descriptor is broken
+        "Gamma Soundtrack": "1 warning",  # "v4.*.*"
+        "My Local Tweaks": "1 warning",  # outdated
+    }
+
+    window.problems_box.setChecked(True)
+    assert "Alpha Interface" not in shown(window)
+    assert len(shown(window)) == 4
+
+
+def test_clicking_a_badge_lists_the_problems(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        window,
+        "show_health",
+        lambda mod, issues: opened.append((mod.name, [i.text for i in issues])),
+    )
+    beta = name_index(window, "Beta Ships").siblingAtColumn(Column.HEALTH)
+    window.table.clicked.emit(beta)
+    [(name, texts)] = opened
+    assert name == "Beta Ships"
+    assert 'supported_version "3.*"' in texts[0]
+
+    # An OK mod has nothing to show.
+    window.table.clicked.emit(name_index(window, "Alpha Interface").siblingAtColumn(Column.HEALTH))
+    assert len(opened) == 1
+
+
+def test_the_health_dialog_groups_problems_by_file(window: MainWindow) -> None:
+    from cold_steel.core.health import Issue
+    from cold_steel.ui.health_dialog import HealthDialog
+
+    mod = name_index(window, "Alpha Interface").data(MOD_ROLE)
+    issues = (
+        Issue("error", "No BOM", "localisation/a_l_english.yml"),
+        Issue("error", "Bad line", "localisation/a_l_english.yml", 3, "X Y"),
+        Issue("warning", "Outdated", "ugc_2000000001.mod"),
+    )
+    dialog = HealthDialog(mod, issues, window)
+    tree = dialog.tree
+    assert tree.topLevelItemCount() == 2
+    loc = tree.topLevelItem(0)
+    assert loc is not None and loc.childCount() == 2
+    bad_line = loc.child(1)
+    assert bad_line is not None and bad_line.text(1) == "3"
+
+
+def test_errors_view_groups_the_log_by_mod(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cold_steel.core.errors import GAME
+
+    assert window.library is not None
+    logs = window.library.game.data_dir / "logs"
+    logs.mkdir()
+    (logs / "error.log").write_text(
+        "[10:00:00][a.cpp:1]: Bad  file: common/alpha.txt line: 1\n"
+        "[10:00:01][b.cpp:2]: Something else\n",
+        "utf-8",
+    )
+    (window.library.game.data_dir / "dlc_load.json").unlink(missing_ok=True)
+    shown_dialogs: list[object] = []
+    monkeypatch.setattr(window, "show_dialog", shown_dialogs.append)
+
+    with qtbot.waitSignal(window.errors_read, timeout=5000) as read:
+        window.errors_action.trigger()
+    # With no dlc_load.json, no mod was loaded: both are the game's, or unknown.
+    assert [g.key for g in read.args[0].groups] == [GAME]
+    assert shown_dialogs and shown_dialogs[0] is window._errors_dialog
+    assert window._errors_dialog is not None
+    assert window._errors_dialog.tree.topLevelItemCount() == 1
+    assert window.errors_button.text() == "Errors (2)"
+
+
+def test_errors_are_read_when_the_game_closes(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Game:
+        exit_code: int | None = None
+
+        def poll(self) -> int | None:
+            return self.exit_code
+
+    game = Game()
+    monkeypatch.setattr(window, "launch", lambda *args: game)
+    window.playset_list.setCurrentRow(2)
+    window.play_action.trigger()
+    assert window._game_timer.isActive()
+
+    window._check_game()  # still running
+    assert window._game_timer.isActive()
+
+    game.exit_code = 0
+    with qtbot.waitSignal(window.errors_read, timeout=5000):
+        window._check_game()
+    assert not window._game_timer.isActive()
+    assert window.statusBar().currentMessage() == "Stellaris closed. Its error log is empty."

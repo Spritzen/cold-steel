@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from msgspec.structs import replace as msgspec_replace
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QModelIndex, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -32,9 +32,12 @@ from PySide6.QtWidgets import (
 )
 
 from cold_steel.core import playsets as ops
+from cold_steel.core.errors import ErrorReader, ErrorReport
+from cold_steel.core.health import Health, HealthChecker, status
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
+from cold_steel.core.mods import Mod
 from cold_steel.core.play import PlayError, PlayPlan, plan_play, play
 from cold_steel.core.playsets import PlaysetBook, missing_mods
 from cold_steel.core.share import ShareError, load_share_file, save_share_file
@@ -44,6 +47,8 @@ from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
 from cold_steel.store.playsets import Playset, playsets_file
 from cold_steel.ui.dlc_dialog import DlcDialog
+from cold_steel.ui.errors_dialog import ErrorsDialog
+from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
 from cold_steel.ui.tasks import Task, TaskRunner
 from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
@@ -59,6 +64,10 @@ class MainWindow(QMainWindow):
     steam_dir_chosen = Signal(Path)
     # A scan finished and its result is on screen. For tests and timing.
     library_shown = Signal(object)
+    # Every mod's health is checked and shown. For tests.
+    health_shown = Signal(object)
+    # error.log was read and grouped by mod. For tests.
+    errors_read = Signal(object)
 
     def __init__(
         self,
@@ -68,6 +77,7 @@ class MainWindow(QMainWindow):
         *,
         playsets_path: Path | None = None,
         backup_dir: Path | None = None,
+        health_cache: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
@@ -78,6 +88,13 @@ class MainWindow(QMainWindow):
         self._scan = scan
         self._scan_task: Task | None = None
         self._thumbnail_task: Task | None = None
+        self._health_task: Task | None = None
+        self._health_cache = health_cache or paths.cache_dir() / "health.msgpack"
+        self._errors_dialog: ErrorsDialog | None = None
+        # The game we started, watched so its errors can be read when it closes.
+        self._game: Any = None
+        self._game_timer = QTimer(self, interval=3000)
+        self._game_timer.timeout.connect(self._check_game)
         self._thumbnail_cache = thumbnail_cache or paths.cache_dir() / "thumbnails"
         self._playsets_path = playsets_path or playsets_file()
         self.backup_dir = backup_dir or paths.data_dir() / "backups"
@@ -134,6 +151,8 @@ class MainWindow(QMainWindow):
         self.sort_action = action("&Sort load order", self.sort_mods)
         self.dlc_action = action("&DLC…", self.choose_dlc)
         self.play_action = action("&Play", self.play, "Ctrl+Return")
+        self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
+        self.errors_action.setEnabled(False)
         self.export_action = action("&Export to launcher", self.export_to_launcher)
         self.save_file_action = action("&Save to file…", self.save_to_file)
         self.load_file_action = action("&Load from file…", self.load_from_file)
@@ -144,7 +163,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self.new_action, self.copy_action, self.rename_action])
         menu.addAction(self.delete_action)
         menu.addSeparator()
-        menu.addActions([self.play_action, self.sort_action, self.dlc_action])
+        menu.addActions([self.play_action, self.errors_action, self.sort_action, self.dlc_action])
         menu.addSeparator()
         menu.addMenu(self.import_menu)
         menu.addAction(self.export_action)
@@ -182,12 +201,16 @@ class MainWindow(QMainWindow):
         )
         self.outdated_box = QCheckBox("Outdated only")
         self.outdated_box.toggled.connect(self.filter.set_outdated_only)
+        self.problems_box = QCheckBox("Problems only")
+        self.problems_box.setToolTip("Mods whose health check found errors or warnings")
+        self.problems_box.toggled.connect(self.filter.set_problems_only)
 
         filters = QHBoxLayout()
         filters.addWidget(self.search, 1)
         filters.addWidget(self.tag_box)
         filters.addWidget(self.membership_box)
         filters.addWidget(self.outdated_box)
+        filters.addWidget(self.problems_box)
 
         self.play_button = self._button("▶  Play", self.play_action)
         font = self.play_button.font()
@@ -197,6 +220,8 @@ class MainWindow(QMainWindow):
         playset_bar = QHBoxLayout(self.playset_bar)
         playset_bar.setContentsMargins(0, 0, 0, 0)
         playset_bar.addWidget(self.play_button)
+        self.errors_button = self._button("Errors", self.errors_action)
+        playset_bar.addWidget(self.errors_button)
         playset_bar.addWidget(self._button("Sort", self.sort_action))
         playset_bar.addWidget(self._button("DLC…", self.dlc_action))
         playset_bar.addStretch()
@@ -222,11 +247,18 @@ class MainWindow(QMainWindow):
         self.table.setDragDropOverwriteMode(False)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
+        self.table.clicked.connect(self._cell_clicked)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(Column.NAME, QHeaderView.ResizeMode.Stretch)
-        for col in (Column.POSITION, Column.VERSION, Column.SUPPORTED, Column.SOURCE):
+        for col in (
+            Column.POSITION,
+            Column.HEALTH,
+            Column.VERSION,
+            Column.SUPPORTED,
+            Column.SOURCE,
+        ):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         header.resizeSection(Column.TAGS, 240)
 
@@ -335,7 +367,9 @@ class MainWindow(QMainWindow):
         outdated = sum(library.is_outdated(m) for m in library.mods)
         self.statusBar().showMessage(f"{len(library.mods)} mods, {outdated} outdated")
         self.pages.setCurrentIndex(0)
+        self.errors_action.setEnabled(True)
         self._load_thumbnails(library)
+        self._check_health(library)
         self.library_shown.emit(library)
 
     def _load_thumbnails(self, library: Library) -> None:
@@ -350,6 +384,39 @@ class MainWindow(QMainWindow):
 
     def _thumbnails_loaded(self, images: dict[str, QImage]) -> None:
         self.model.set_thumbnails(images, blank_thumbnail())
+
+    def _check_health(self, library: Library) -> None:
+        if self._health_task is not None:
+            self._health_task.cancel()
+        self.model.set_health(None)
+        task = self.tasks.start(HealthChecker(library, self._health_cache))
+        self._health_task = task
+        # A rescan replaces this task; a result from the old one is ignored.
+        task.succeeded.connect(lambda health: self._health_checked(health, task))
+        task.failed.connect(
+            lambda error: self.statusBar().showMessage(f"Checking mods failed: {error}")
+        )
+
+    def _health_checked(self, health: dict[str, Health], task: Task) -> None:
+        if task is not self._health_task:
+            return
+        self.model.set_health(health)
+        if self.library is not None:
+            mods = self.library.mods
+            outdated = sum(self.library.is_outdated(m) for m in mods)
+            broken = sum(status(health.get(m.key, ())) == "error" for m in mods)
+            self.statusBar().showMessage(
+                f"{len(mods)} mods, {outdated} outdated, {broken} with broken files"
+            )
+        self.health_shown.emit(health)
+
+    def _cell_clicked(self, index: QModelIndex) -> None:
+        if index.column() != Column.HEALTH:
+            return
+        mod: Mod = index.data(MOD_ROLE)
+        issues = self.model.health(mod)
+        if issues:
+            self.show_health(mod, issues)
 
     def _scan_failed(self, error: Exception) -> None:
         if isinstance(error, GameNotFound):
@@ -692,13 +759,59 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            self.launch(plan, self.library.game, self.backup_dir)
+            process = self.launch(plan, self.library.game, self.backup_dir)
         except PlayError as error:
             self.tell("Play", str(error))
             return
         self.book.set_active(playset.id)
         self._fill_playsets(playset.id)
         self.statusBar().showMessage(f"Stellaris is starting with {playset.name}")
+        if hasattr(process, "poll"):
+            self._game = process
+            self._game_timer.start()
+
+    # Errors from the game
+
+    def show_errors(self) -> None:
+        """Read error.log and show it, grouped by mod."""
+        self._read_errors(show=True)
+
+    def _read_errors(self, *, show: bool) -> None:
+        if self.library is None:
+            return
+        task = self.tasks.start(ErrorReader(self.library))
+        task.succeeded.connect(lambda report: self._errors_ready(report, show=show))
+        task.failed.connect(
+            lambda error: self.statusBar().showMessage(f"Reading error.log failed: {error}")
+        )
+
+    def _errors_ready(self, report: ErrorReport, *, show: bool) -> None:
+        self.errors_button.setText(f"Errors ({report.total})" if report.total else "Errors")
+        dialog = self._errors_dialog
+        if show and dialog is None:
+            dialog = self._errors_dialog = ErrorsDialog(self)
+            dialog.refresh_requested.connect(self.show_errors)
+        if dialog is not None and (show or dialog.isVisible()):
+            dialog.set_report(report)
+            if show:
+                self.show_dialog(dialog)
+        if not show:  # read because the game closed
+            self.statusBar().showMessage(
+                f"Stellaris closed with {report.total} errors in its log. "
+                "Press Errors to see which mods caused them."
+                if report.total
+                else "Stellaris closed. Its error log is empty."
+            )
+        self.errors_read.emit(report)
+
+    def _check_game(self) -> None:
+        """Runs every few seconds while the game we started is open."""
+        if self._game is None or self._game.poll() is None:
+            return
+        self._game_timer.stop()
+        self._game = None
+        self.statusBar().showMessage("Stellaris closed. Reading its error log…")
+        self._read_errors(show=False)
 
     # Questions for the user. Tests replace these.
 
@@ -719,6 +832,15 @@ class MainWindow(QMainWindow):
             return None
         dialog = DlcDialog(self.library.dlcs, playset.disabled_dlcs, self)
         return dialog.disabled() if dialog.exec() else None
+
+    def show_health(self, mod: Mod, issues: Health) -> None:
+        HealthDialog(mod, issues, self).exec()
+
+    def show_dialog(self, dialog: QWidget) -> None:
+        """Show a window that stays open beside this one."""
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def ask_save_path(self, name: str) -> Path | None:
         path, _ = QFileDialog.getSaveFileName(
