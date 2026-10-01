@@ -6,7 +6,7 @@ relies on the one before.
 | Phase | Result | Status |
 |---|---|---|
 | [0 — Foundation](phase-0-foundation.md) | An empty window opens, and one command runs every check | Done |
-| [1 — Discover](phase-1-discover.md) | The app lists every installed mod and your launcher playsets. Read-only | Not started |
+| [1 — Discover](phase-1-discover.md) | The app lists every installed mod and your launcher playsets. Read-only | Done |
 | [2 — Playsets](phase-2-playsets.md) | Build a playset in the app and launch the game with it | Not started |
 | [3 — Diagnose](phase-3-diagnose.md) | See broken mods before playing, and which mod caused each error after | Not started |
 | [4 — Conflicts](phase-4-conflicts.md) | See exactly where mods clash, side by side | Not started |

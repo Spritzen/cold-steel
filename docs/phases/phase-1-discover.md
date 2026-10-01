@@ -1,23 +1,25 @@
 # Phase 1: Discover
 
-**Status:** Not started
+**Status:** Done
 **Result:** The app lists every installed mod and your existing launcher
 playsets, without writing anything.
 
 ## Done when
 
-- [ ] It finds Stellaris with no setup, and shows the game version
-- [ ] It lists every Workshop mod and local mod, with name, version, supported
+- [x] It finds Stellaris with no setup, and shows the game version
+- [x] It lists every Workshop mod and local mod, with name, version, supported
       game version, tags and thumbnail
-- [ ] Mods made for an older game version are marked as outdated
-- [ ] The playsets from the Paradox launcher are shown, in the launcher's order
-- [ ] The mod list can be searched and filtered (by name, tag, outdated, in a
+- [x] Mods made for an older game version are marked as outdated
+- [x] The playsets from the Paradox launcher are shown, in the launcher's order
+      (oldest first), with each playset's mods in load order
+- [x] The mod list can be searched and filtered (by name, tag, outdated, in a
       playset or not)
-- [ ] Opening the app a second time takes under 1 second with 50+ mods,
-      because unchanged mods come from the cache
-- [ ] Tests run against small sample mods in `tests/fixtures/`, not your real
+- [x] Opening the app a second time takes under 1 second with 50+ mods,
+      because unchanged mods come from the cache. Measured: 0.52 s from start
+      to the list on screen, with 55 mods
+- [x] Tests run against small sample mods in `tests/fixtures/`, not your real
       install
-- [ ] Nothing under `$PARADOX_DATA_DIR` or `$STEAM_DIR` has changed (a test
+- [x] Nothing under `$PARADOX_DATA_DIR` or `$STEAM_DIR` has changed (a test
       checks this)
 
 ## What it contains
@@ -51,7 +53,4 @@ playset sidebar, and a status bar showing background progress.
 
 ## Open questions
 
-| Question | Recommendation |
-|---|---|
-| Steam installed as Flatpak or Snap (different paths)? | Support the normal install only. Make the Steam path a setting so others can point it manually |
-| Mods shipped as a `.zip` (`archive=` in the `.mod` file)? Some Workshop mods do this | Read inside the zip without unpacking it. Python's `zipfile` can do this |
+None.

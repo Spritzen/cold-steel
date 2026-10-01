@@ -5,8 +5,8 @@
     task.succeeded.connect(mod_list.set_mods)
     task.failed.connect(show_error)
 
-Signals are emitted from the worker thread and delivered on the main thread,
-because the `Task` object lives there.
+Every signal is emitted on the main thread, from the event loop. So signals
+connected straight after `start()` never miss a result, however fast the job.
 """
 
 from typing import Any
@@ -25,10 +25,17 @@ class Task(QObject):
     cancelled = Signal()
     finished = Signal()  # always last, whatever the outcome
 
+    # Emitted on the worker thread. Connected here, at creation, so the queued
+    # call to the main thread always has a receiver.
+    _worker_progress = Signal(int, int, str)
+    _worker_done = Signal(str, object)  # outcome, value
+
     def __init__(self, job: Job[Any], parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._job = job
-        self._ctx = JobContext(self.progress.emit)
+        self._ctx = JobContext(self._worker_progress.emit)
+        self._worker_progress.connect(self.progress)
+        self._worker_done.connect(self._deliver)
 
     def cancel(self) -> None:
         self._ctx.cancel()
@@ -38,16 +45,21 @@ class Task(QObject):
         try:
             result = self._job(self._ctx)
         except Cancelled:
-            self.cancelled.emit()
+            self._worker_done.emit("cancelled", None)
         except Exception as error:
-            self.failed.emit(error)
+            self._worker_done.emit("failed", error)
         else:
-            if self._ctx.cancelled:
-                self.cancelled.emit()
-            else:
-                self.succeeded.emit(result)
-        finally:
-            self.finished.emit()
+            self._worker_done.emit("cancelled" if self._ctx.cancelled else "succeeded", result)
+
+    def _deliver(self, outcome: str, value: object) -> None:
+        """Runs on the main thread."""
+        if outcome == "succeeded":
+            self.succeeded.emit(value)
+        elif outcome == "failed":
+            self.failed.emit(value)
+        else:
+            self.cancelled.emit()
+        self.finished.emit()
 
 
 class _Runnable(QRunnable):

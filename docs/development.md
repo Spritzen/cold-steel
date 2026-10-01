@@ -33,11 +33,18 @@ PYTHONPATH=src python -m cold_steel
 - Timing tests use pytest-benchmark's `benchmark` fixture. `make test` skips
   them; `make bench` runs only them.
 - Code in `core/`, `store/` and `paradox/` should be tested without Qt.
+- `tests/fixtures/` holds a small fake install (two Steam libraries, three
+  Workshop mods, a local mod, a launcher database). `conftest.py` copies it to
+  a temporary folder for each test, and builds the binary parts there.
+- One test, marked `real_install`, scans your real install with the cache in a
+  temporary folder, then checks that nothing in your Paradox folder changed.
+  It's skipped on machines without Stellaris.
 
 ## Type checking
 
 mypy runs in strict mode on `src/`, `tests/` and `tools/`
-([decision 3](decisions.md)). PySide6 from pacman ships type stubs but no
+([decision 3](decisions.md)). `tests/` is on mypy's path so tests can import
+helpers from `conftest.py`. PySide6 from pacman ships type stubs but no
 `py.typed` marker, so `pyproject.toml` tells mypy to use them anyway.
 
 ## Branches

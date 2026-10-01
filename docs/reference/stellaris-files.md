@@ -25,7 +25,9 @@ Stellaris is Steam app **281990**.
 | `$STEAM_DIR/steamapps/workshop/content/281990/<id>/` | One folder per subscribed Workshop mod, named by its Workshop ID |
 
 Some Workshop mods are a single `.zip` instead of loose files (for example
-mod `1224507727` holds only `exst.zip`).
+mod `1224507727` holds only `exst.zip`). Their `descriptor.mod` is inside the
+zip, and their picture is often missing. The launcher keeps its own copy of each
+Steam thumbnail in `.launcher-cache/` (see `mods.thumbnailPath` below).
 
 ## Paradox user data (read-write)
 
@@ -70,11 +72,12 @@ The order of `enabled_mods` is the load order.
 
 | Table | Holds |
 |---|---|
-| `mods` | Every known mod: `id` (the launcher's own ID), `steamId`, `name`, `displayName`, `version`, `requiredVersion`, `dirPath`, `archivePath`, `status` and more |
-| `playsets` | `id`, `name`, `isActive`, `loadOrder` (`custom` or blank), `createdOn`, `updatedOn`… |
+| `mods` | Every known mod: `id` (the launcher's own ID), `steamId`, `name`, `displayName`, `version`, `requiredVersion`, `dirPath`, `archivePath`, `thumbnailPath`, `status` (`ready_to_play`, or `unsubscribed` for mods gone from disk) and more |
+| `playsets` | `id`, `name`, `isActive`, `loadOrder` (`custom` or blank), `createdOn`, `updatedOn`, `isRemoved`… |
 | `playsets_mods` | Which mods are in which playset: `playsetId`, `modId`, `enabled`, `position` |
 | `playsets_dlcs` | DLC per playset |
 
 The layout has changed between launcher versions, so check for the columns we
-need on open and stop clearly if they're missing. On this install: 62 mods,
-4 playsets.
+need on open and stop clearly if they're missing. On this install: 62 mods
+(7 of them unsubscribed), 4 playsets. The file uses `journal_mode=delete`, so
+opening it read-only creates no `-wal` or `-shm` files.
