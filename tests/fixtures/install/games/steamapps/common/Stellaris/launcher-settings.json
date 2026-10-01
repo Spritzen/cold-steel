@@ -5,5 +5,6 @@
 	"rawVersion": "v4.5.1",
 	"distPlatform": "steam",
 	"gameDataPath": "$LINUX_DATA_HOME/Paradox Interactive/Stellaris",
-	"exePath": "./stellaris"
+	"exePath": "./stellaris",
+	"exeArgs": [ "-gdpr-compliant" ]
 }

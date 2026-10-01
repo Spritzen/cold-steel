@@ -46,3 +46,25 @@ def decode_descriptor(data: bytes) -> Descriptor:
 
 def _strings(nodes: tuple[Node, ...]) -> tuple[str, ...]:
     return tuple(n.value for n in nodes if n.key is None and isinstance(n.value, str))
+
+
+def format_descriptor(desc: Descriptor) -> str:
+    """A `.mod` file's text, in the launcher's layout. Blank fields are left out."""
+    lines: list[str] = []
+    for field in ("name", "version"):
+        if value := getattr(desc, field):
+            lines.append(f'{field}="{_escape(value)}"')
+    for field in _LISTS:
+        if values := getattr(desc, field):
+            lines.append(f"{field}={{")
+            lines += [f'\t"{_escape(v)}"' for v in values]
+            lines.append("}")
+    for field in ("picture", "supported_version", "path", "archive", "remote_file_id"):
+        if value := getattr(desc, field):
+            lines.append(f'{field}="{_escape(value)}"')
+    return "\n".join(lines) + "\n"
+
+
+def _escape(value: str) -> str:
+    # Only quotes: the game, like our parser, reads a backslash as itself.
+    return value.replace('"', '\\"')

@@ -72,30 +72,40 @@ def test_outdated_mods_are_marked(sample_install: SampleInstall) -> None:
     assert outdated == {"Beta Ships", "My Local Tweaks"}
 
 
-def test_playsets_link_to_mods_in_load_order(sample_install: SampleInstall) -> None:
+def test_launcher_playsets_link_to_mods_in_load_order(sample_install: SampleInstall) -> None:
     library = scan(sample_install)
 
-    main, second = library.playsets
-    assert main.name == "Main Playset" and main.active
+    main, second = library.launcher_playsets
+    assert main.name == "Main Playset"
+    assert library.launcher_active == main.id
     assert [(e.key, e.enabled) for e in main.entries] == [
         ("workshop:2000000001", True),
         ("workshop:2000000003", False),
         ("local:my_local", True),
         ("workshop:2000000099", True),
     ]
+    # The unsubscribed mod keeps its key and name, so it can be shown as missing.
+    assert main.entries[3].name == "Unsubscribed Mod"
     assert [e.key for e in second.entries] == ["workshop:2000000003"]
-    # The unsubscribed mod is listed as missing, not as installed.
-    assert [(m.key, m.name, m.installed) for m in library.missing] == [
-        ("workshop:2000000099", "Unsubscribed Mod", False)
-    ]
     assert library.problems == ()
+
+
+def test_launcher_dlc_ids_become_dlc_folders(sample_install: SampleInstall) -> None:
+    library = scan(sample_install)
+    assert [d.folder for d in library.dlcs] == ["dlc002_arachnoid", "dlc032_machine_age"]
+    assert library.dlcs[0].name == "Arachnoid Portrait Pack"
+    assert library.dlcs[0].file == "dlc/dlc002_arachnoid/dlc002.dlc"
+    main, second = library.launcher_playsets
+    # "arachnoid" has no number; "dlc032_cybernetics" is the launcher's old name.
+    assert main.disabled_dlcs == ("dlc002_arachnoid", "dlc032_machine_age")
+    assert second.disabled_dlcs == ()
 
 
 def test_a_bad_launcher_database_still_lists_mods(sample_install: SampleInstall) -> None:
     (sample_install.data_dir / "launcher-v2.sqlite").unlink()
     library = scan(sample_install)
     assert len(library.mods) == 5
-    assert library.playsets == ()
+    assert library.launcher_playsets == ()
     assert "isn't there" in library.problems[0]
 
 
