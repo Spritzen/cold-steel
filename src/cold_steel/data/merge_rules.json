@@ -1,0 +1,60 @@
+{
+  "about": "How the game picks between two definitions of one object. One row per game folder; a row also covers the folders inside it unless a deeper row says otherwise. Folders with no row use 'default'. 'checked' is the date a live run confirmed the row, empty until then.",
+  "units": {
+    "key": "Each top-level `name = { ... }` is one object, named by its key",
+    "field": "Each top-level block is one object, named by the field inside it given in 'field'",
+    "define": "Each value inside a top-level block is one object: NCategory.NAME",
+    "name": "Each block with a `name = ...` is one object. Wrappers like spriteTypes = { ... } are looked inside",
+    "localisation": "Each KEY: \"text\" line is one object",
+    "file": "The whole file is the object, so only files at the same path clash"
+  },
+  "winners": {
+    "last": "The definition in the file whose name sorts last wins",
+    "first": "The definition in the file whose name sorts first wins",
+    "merged": "The game combines every definition, so they never clash",
+    "localisation": "A key in a replace/ folder beats one outside it. Then a mod's beats the game's, then the file whose name sorts last wins"
+  },
+  "default": {"winner": "last", "unit": "key", "source": "Irony"},
+  "rules": [
+    {"folder": "common/component_sets", "winner": "first", "source": "Irony"},
+    {"folder": "common/component_templates", "winner": "first", "source": "Irony"},
+    {"folder": "common/event_chains", "winner": "first", "source": "Irony"},
+    {"folder": "common/global_ship_designs", "winner": "first", "source": "Irony"},
+    {"folder": "common/governments/authorities", "winner": "first", "source": "Irony"},
+    {"folder": "common/scripted_variables", "winner": "first", "source": "Irony"},
+    {"folder": "common/section_templates", "winner": "first", "source": "Irony"},
+    {"folder": "common/ship_behaviors", "winner": "first", "source": "Irony"},
+    {"folder": "common/solar_system_initializers", "winner": "first", "source": "Irony"},
+    {"folder": "common/special_projects", "winner": "first", "unit": "field", "field": "key", "source": "Irony"},
+    {"folder": "common/start_screen_messages", "winner": "first", "unit": "file", "source": "Irony"},
+    {"folder": "common/strategic_resources", "winner": "first", "source": "Irony"},
+    {"folder": "common/traits", "winner": "first", "source": "Irony"},
+    {"folder": "events", "winner": "first", "unit": "field", "field": "id", "source": "Irony"},
+
+    {"folder": "common/defines", "unit": "define", "source": "Irony"},
+    {"folder": "common/on_actions", "winner": "merged", "source": "Stellaris modding wiki"},
+
+    {"folder": "common/component_tags", "unit": "file", "source": "Irony"},
+    {"folder": "common/country_container", "unit": "file", "source": "Irony"},
+    {"folder": "common/diplo_phrases", "unit": "file", "source": "Irony"},
+    {"folder": "common/diplomacy_economy", "unit": "file", "source": "Irony"},
+    {"folder": "common/economic_plans", "unit": "file", "source": "Irony"},
+    {"folder": "common/gamesetup_settings", "unit": "file", "source": "Irony"},
+    {"folder": "common/inline_scripts", "unit": "file", "source": "Irony"},
+    {"folder": "common/job_tags", "unit": "file", "source": "Irony"},
+    {"folder": "common/name_lists", "unit": "file", "source": "Irony"},
+    {"folder": "common/random_names", "unit": "file", "source": "Irony"},
+    {"folder": "common/species_classes", "unit": "file", "source": "Irony"},
+    {"folder": "common/species_names", "unit": "file", "source": "Irony"},
+    {"folder": "common/terraform", "unit": "file", "source": "Irony"},
+    {"folder": "common/trait_tags", "unit": "file", "source": "Irony"},
+    {"folder": "gfx/portraits/portraits", "unit": "file", "source": "Irony"},
+    {"folder": "map/galaxy", "unit": "file", "source": "Irony"},
+    {"folder": "map/setup_scenarios", "unit": "file", "source": "Irony"},
+
+    {"folder": "gfx", "unit": "name", "source": "Irony"},
+    {"folder": "interface", "unit": "name", "source": "Irony"},
+    {"folder": "localisation", "winner": "localisation", "unit": "localisation", "source": "Irony"},
+    {"folder": "localisation_synced", "winner": "localisation", "unit": "localisation", "source": "Irony"}
+  ]
+}

@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QModelIndex
+from PySide6.QtCore import QModelIndex, Qt
 from pytestqt.qtbot import QtBot
 
+from cold_steel.core import playsets as ops
 from cold_steel.core.library import Scanner
+from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership
 from conftest import SampleInstall
@@ -408,3 +410,127 @@ def test_errors_are_read_when_the_game_closes(
         window._check_game()
     assert not window._game_timer.isActive()
     assert window.statusBar().currentMessage() == "Stellaris closed. Its error log is empty."
+
+
+# Phase 4: conflicts
+
+
+@pytest.fixture
+def clashing(qtbot: QtBot, window: MainWindow, sample_install: SampleInstall) -> MainWindow:
+    """Alpha and My Local clash on a technology, a whole file and one identical object.
+
+    The Main Playset loads Alpha, then My Local.
+    """
+    alpha = sample_install.workshop_dir / "2000000001"
+    local = sample_install.data_dir / "mod/my_local"
+    files = {
+        alpha: {
+            "common/technology/b_alpha.txt": b"tech_x = {\n\tcost = 1\n}\nonly_alpha = { }\n",
+            "common/static_modifiers/a.txt": b"mod_same = { x = 1 }\n",
+            "interface/same.gui": b"guiTypes = { }\n",
+        },
+        local: {
+            "common/technology/a_local.txt": b"tech_x = {\n\tcost = 2\n}\n",
+            "common/static_modifiers/b.txt": b"mod_same = {\n\tx = 1\n}\n",
+            "interface/same.gui": b"guiTypes = { } # mine\n",
+        },
+    }
+    for root, contents in files.items():
+        for name, data in contents.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes(data)
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.rescan()
+    window.playset_list.setCurrentRow(1)
+    assert window.selected_playset() is not None
+    assert window.selected_playset().name == "Main Playset"  # type: ignore[union-attr]
+    return window
+
+
+def open_conflicts(qtbot: QtBot, window: MainWindow, mod: str | None = None) -> ConflictsWindow:
+    with qtbot.waitSignal(window.conflicts_shown, timeout=20_000):
+        window.show_conflicts(mod)
+    assert window._conflicts_window is not None
+    return window._conflicts_window
+
+
+def groups(conflicts: ConflictsWindow) -> dict[str, list[tuple[str, str]]]:
+    """Each group's label, with each row's name and winner."""
+    tree = conflicts.tree
+    result: dict[str, list[tuple[str, str]]] = {}
+    for n in range(tree.topLevelItemCount()):
+        group = tree.topLevelItem(n)
+        assert group is not None
+        rows = [group.child(r) for r in range(group.childCount())]
+        result[group.text(0)] = [(r.text(0), r.text(1)) for r in rows if r is not None]
+    return result
+
+
+def test_conflicts_are_listed_by_type_with_the_winner(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+
+    # a_local.txt sorts before b_alpha.txt, so Alpha wins though it loads first.
+    # The identical static modifier is hidden until asked for.
+    assert groups(conflicts) == {
+        "Technology (1)": [("tech_x", "Alpha Interface")],
+        "Whole files (1)": [("interface/same.gui", "My Local Tweaks")],
+    }
+    assert conflicts.windowTitle() == "Conflicts in Main Playset"
+    assert "3 conflicts between mods" in conflicts.summary.text()  # one is identical
+
+    conflicts.identical_box.setChecked(True)
+    assert "Static modifiers (1)" in groups(conflicts)
+
+    conflicts.type_box.setCurrentIndex(conflicts.type_box.findText("Technology"))
+    assert list(groups(conflicts)) == ["Technology (1)"]
+
+    conflicts.type_box.setCurrentIndex(0)
+    conflicts.group_box.setCurrentIndex(1)  # by mod
+    assert list(groups(conflicts)) == ["Alpha Interface (3)", "My Local Tweaks (3)"]
+
+
+def test_a_conflict_is_shown_side_by_side(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    conflicts.tree.expandAll()
+    tech = conflicts.tree.findItems("tech_x", Qt.MatchFlag.MatchRecursive)[0]
+
+    with qtbot.waitSignal(conflicts.compared, timeout=5000) as compared:
+        conflicts.tree.setCurrentItem(tech)
+    pair = compared.args[0]
+    # The winner on the right, the version it beat on the left.
+    assert "cost = 2" in pair.left.text
+    assert "cost = 1" in pair.right.text
+    assert pair.left.changed == pair.right.changed == frozenset({1})
+    assert "Alpha Interface</b> wins" in conflicts.reason.text()
+    assert "b_alpha.txt sorts last" in conflicts.reason.text()
+    assert "not yet checked in game" in conflicts.rule.text()
+    assert conflicts.right_box.currentText().startswith("★ Alpha Interface")
+    assert conflicts.viewer.right.toPlainText() == pair.right.text
+
+
+def test_search_finds_any_object_in_the_playset(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    with qtbot.waitSignal(conflicts.searched, timeout=5000):
+        conflicts.search.setText("ONLY_")
+
+    assert groups(conflicts) == {"Technology (1)": [("only_alpha", "Alpha Interface")]}
+    group = conflicts.tree.topLevelItem(0)
+    item = group.child(0) if group else None
+    assert item is not None
+    conflicts.tree.setCurrentItem(item)
+    assert conflicts.reason.text() == "Only one version."
+
+
+def test_conflicts_for_one_mod_and_after_a_change(qtbot: QtBot, clashing: MainWindow) -> None:
+    conflicts = open_conflicts(qtbot, clashing, "local:my_local")
+    assert conflicts.mod_box.currentData() == "local:my_local"
+    assert "Whole files (1)" in groups(conflicts)
+
+    # Moving My Local first changes who wins the whole file, but not the
+    # technology: file names decide that.
+    with qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000):
+        clashing._edit(lambda p: ops.move_mods(p, ["local:my_local"], "workshop:2000000001"))
+    assert groups(conflicts) == {
+        "Technology (1)": [("tech_x", "Alpha Interface")],
+        "Whole files (1)": [("interface/same.gui", "Alpha Interface")],
+    }

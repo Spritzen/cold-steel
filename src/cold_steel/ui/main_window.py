@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 from cold_steel.core import playsets as ops
+from cold_steel.core.conflicts import ConflictFinder, Found
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
+from cold_steel.core.index import Index, Indexer
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
@@ -46,6 +48,7 @@ from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
 from cold_steel.store.playsets import Playset, playsets_file
+from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.health_dialog import HealthDialog
@@ -68,6 +71,8 @@ class MainWindow(QMainWindow):
     health_shown = Signal(object)
     # error.log was read and grouped by mod. For tests.
     errors_read = Signal(object)
+    # A playset's conflicts are on screen in the Conflicts window. For tests.
+    conflicts_shown = Signal(object)
 
     def __init__(
         self,
@@ -78,6 +83,7 @@ class MainWindow(QMainWindow):
         playsets_path: Path | None = None,
         backup_dir: Path | None = None,
         health_cache: Path | None = None,
+        index_cache: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
@@ -91,6 +97,11 @@ class MainWindow(QMainWindow):
         self._health_task: Task | None = None
         self._health_cache = health_cache or paths.cache_dir() / "health.msgpack"
         self._errors_dialog: ErrorsDialog | None = None
+        self._index_cache = index_cache or paths.cache_dir() / "index"
+        # Kept between searches, so unchanged mods aren't even loaded from the cache again.
+        self._index: Index | None = None
+        self._conflicts_window: ConflictsWindow | None = None
+        self._conflicts_task: Task | None = None
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -153,6 +164,7 @@ class MainWindow(QMainWindow):
         self.play_action = action("&Play", self.play, "Ctrl+Return")
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
+        self.conflicts_action = action("&Conflicts…", self.show_conflicts, "Ctrl+K")
         self.export_action = action("&Export to launcher", self.export_to_launcher)
         self.save_file_action = action("&Save to file…", self.save_to_file)
         self.load_file_action = action("&Load from file…", self.load_from_file)
@@ -163,7 +175,8 @@ class MainWindow(QMainWindow):
         menu.addActions([self.new_action, self.copy_action, self.rename_action])
         menu.addAction(self.delete_action)
         menu.addSeparator()
-        menu.addActions([self.play_action, self.errors_action, self.sort_action, self.dlc_action])
+        menu.addActions([self.play_action, self.errors_action, self.conflicts_action])
+        menu.addActions([self.sort_action, self.dlc_action])
         menu.addSeparator()
         menu.addMenu(self.import_menu)
         menu.addAction(self.export_action)
@@ -222,6 +235,7 @@ class MainWindow(QMainWindow):
         playset_bar.addWidget(self.play_button)
         self.errors_button = self._button("Errors", self.errors_action)
         playset_bar.addWidget(self.errors_button)
+        playset_bar.addWidget(self._button("Conflicts", self.conflicts_action))
         playset_bar.addWidget(self._button("Sort", self.sort_action))
         playset_bar.addWidget(self._button("DLC…", self.dlc_action))
         playset_bar.addStretch()
@@ -507,6 +521,7 @@ class MainWindow(QMainWindow):
             self.sort_action,
             self.dlc_action,
             self.play_action,
+            self.conflicts_action,
             self.export_action,
             self.save_file_action,
         ):
@@ -515,6 +530,7 @@ class MainWindow(QMainWindow):
         self.load_file_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
         self.playset_bar.setVisible(chosen)
+        self._refresh_conflicts()
 
     def _show_playset(self, playset: Playset | None) -> None:
         """Show this playset's order and missing mods. None shows all mods."""
@@ -548,6 +564,7 @@ class MainWindow(QMainWindow):
 
     def _playset_changed(self, playset: Playset) -> None:
         self._show_playset(playset)
+        self._refresh_conflicts()
         item = self.playset_list.currentItem()
         if item is not None:
             item.setText(self._playset_label(playset))
@@ -660,6 +677,8 @@ class MainWindow(QMainWindow):
             menu.addAction("Move to bottom").triggered.connect(
                 lambda: self._edit(lambda p: ops.move_mods(p, keys, None))
             )
+            menu.addSeparator()
+            menu.addAction("Show conflicts").triggered.connect(lambda: self.show_conflicts(keys[0]))
             menu.addSeparator()
             menu.addAction("Remove from playset").triggered.connect(
                 lambda: self._edit(lambda p: ops.remove_mods(p, keys))
@@ -812,6 +831,58 @@ class MainWindow(QMainWindow):
         self._game = None
         self.statusBar().showMessage("Stellaris closed. Reading its error log…")
         self._read_errors(show=False)
+
+    # Conflicts
+
+    def show_conflicts(self, mod: str | None = None) -> None:
+        """Open the Conflicts window for the selected playset. `mod` filters it to one mod."""
+        if self.selected_playset() is None or self.library is None:
+            return
+        window = self._conflicts_window
+        if window is None:
+            window = self._conflicts_window = ConflictsWindow(self.tasks, self)
+            window.refresh_requested.connect(self._find_conflicts)
+        self.show_dialog(window)
+        self._find_conflicts(mod)
+
+    def _refresh_conflicts(self) -> None:
+        """The playset or its order changed: update the Conflicts window if it's open."""
+        window = self._conflicts_window
+        if window is None or not window.isVisible():
+            return
+        if self.selected_playset() is None:
+            window.close()
+        else:
+            self._find_conflicts()
+
+    def _find_conflicts(self, mod: str | None = None) -> None:
+        playset, library, window = self.selected_playset(), self.library, self._conflicts_window
+        if playset is None or library is None or window is None:
+            return
+        if self._conflicts_task is not None:
+            self._conflicts_task.cancel()
+        window.setWindowTitle(f"Conflicts in {playset.name}")
+        cache, previous = self._index_cache, self._index
+
+        def job(ctx: JobContext) -> tuple[Index, Found]:
+            index = Indexer(library, cache, previous)(ctx)
+            return index, ConflictFinder(index, playset, library)(ctx)
+
+        task = self.tasks.start(job)
+        self._conflicts_task = task
+        task.progress.connect(window.show_progress)
+        task.succeeded.connect(lambda result: self._conflicts_found(result, task, mod))
+        task.failed.connect(lambda error: window.show_failure(f"Finding conflicts failed: {error}"))
+
+    def _conflicts_found(self, result: tuple[Index, Found], task: Task, mod: str | None) -> None:
+        if task is not self._conflicts_task or self._conflicts_window is None:
+            return  # a newer search replaced this one
+        self._conflicts_task = None
+        index, found = result
+        self._index = index
+        names = {m.key: m.name for m in self.library.mods} if self.library else {}
+        self._conflicts_window.set_found(found, index, names, mod)
+        self.conflicts_shown.emit(found)
 
     # Questions for the user. Tests replace these.
 
