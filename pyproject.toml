@@ -5,7 +5,6 @@
 name = "cold-steel"
 version = "0.0.1"
 description = "A native Linux mod manager for Stellaris"
-readme = "CLAUDE.md"
 license = "MIT"
 requires-python = ">=3.14"
 
