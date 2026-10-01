@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -20,6 +20,10 @@ from PySide6.QtWidgets import (
 from cold_steel.core.errors import GAME, ErrorReport, GameError
 
 ERROR_ROLE = Qt.ItemDataRole.UserRole
+NOT_LOADED = (
+    "This mod wasn't loaded in this game. The game still reads every .mod file as it "
+    "starts, and logs problems in them."
+)
 
 
 class ErrorsDialog(QDialog):
@@ -85,19 +89,24 @@ class ErrorsDialog(QDialog):
             )
             return
         when = datetime.fromtimestamp(report.written).strftime("%H:%M on %d %B")
-        mods = sum(g.key != GAME for g in report.groups)
+        mods = sum(g.key != GAME and g.loaded for g in report.groups)
         self.summary.setText(
             f"{report.total} errors from the game run at {when}. "
-            f"{mods} mod(s) caused some of them. Errors that name no mod file are under "
-            "“Game / unknown”."
+            f"{mods} loaded mod(s) caused some of them. Errors that name no mod file are "
+            "under “Game / unknown”."
             if report.total
             else f"No errors from the game run at {when}."
         )
         bold = QFont()
         bold.setBold(True)
         for group in report.groups:
-            top = QTreeWidgetItem(self.tree, [group.name, str(group.total), ""])
+            name = group.name if group.loaded else f"{group.name} (not loaded)"
+            top = QTreeWidgetItem(self.tree, [name, str(group.total), ""])
             top.setFont(0, bold)
+            if not group.loaded:
+                top.setToolTip(0, NOT_LOADED)
+                for col in range(3):
+                    top.setForeground(col, QColor(Qt.GlobalColor.gray))
             for error in group.errors:
                 first = error.text.splitlines()[0] if error.text else ""
                 where = f"{error.file}:{error.line}" if error.line else error.file

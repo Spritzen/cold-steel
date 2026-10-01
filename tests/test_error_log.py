@@ -107,6 +107,15 @@ def test_errors_are_grouped_by_the_mod_that_caused_them(
     assert alpha.code == 'supported_version="v4.5.*"'  # line 8 of its mod/*.mod file
     [beta] = found["workshop:2000000002"]  # named by its folder
     assert beta.source == "dlc.cpp:1847"
+    # The game checks every mod's files as it starts, but Beta Ships wasn't
+    # loaded: its group is marked so, after the loaded mods.
+    assert [(g.key, g.loaded) for g in report.groups] == [
+        ("workshop:2000000001", True),  # one error each, so by name
+        ("workshop:2000000003", True),
+        ("local:my_local", True),
+        ("workshop:2000000002", False),
+        (GAME, True),
+    ]
 
     # Beta Ships wasn't loaded, so events/beta.txt can't be its. Errors that
     # name no file are the game's, or unknown. Repeats are counted, not listed.

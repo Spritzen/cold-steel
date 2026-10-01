@@ -6,6 +6,10 @@ An error names a file, like `common/traits/x.txt`. The mods the game loaded
 are in `dlc_load.json`, in load order. The last of them that has that file is
 the one the game was reading. If none has it, the file is the game's own, and
 the error goes under "game / unknown" with the errors that name no file.
+
+The game also reads every mod/*.mod file as it starts, loaded or not, and
+logs problems in them. Those errors name a mod that wasn't loaded, so its
+group is marked `loaded=False` and listed after the loaded mods.
 """
 
 import os
@@ -40,6 +44,7 @@ class ErrorGroup:
     key: str  # a Mod.key, or GAME
     name: str
     errors: tuple[GameError, ...]
+    loaded: bool = True  # False for a mod the game didn't load in this run
 
     @property
     def total(self) -> int:
@@ -103,11 +108,18 @@ class ErrorReader:
                 )
 
         names = {m.key: m.name for m in self.library.mods}
+        loaded_keys = {m.key for m in loaded}
         groups = [
-            ErrorGroup(key, names.get(key, GAME_NAME), tuple(errors.values()))
+            ErrorGroup(
+                key,
+                names.get(key, GAME_NAME),
+                tuple(errors.values()),
+                loaded=key == GAME or key in loaded_keys,
+            )
             for key, errors in grouped.items()
         ]
-        groups.sort(key=lambda g: (g.key == GAME, -g.total, g.name.casefold()))
+        # Loaded mods, most errors first; then mods that weren't loaded; then the game.
+        groups.sort(key=lambda g: (g.key == GAME, not g.loaded, -g.total, g.name.casefold()))
         try:
             stale = (game.data_dir / DLC_LOAD).stat().st_mtime > written
         except OSError:
