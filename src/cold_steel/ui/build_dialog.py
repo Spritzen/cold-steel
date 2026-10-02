@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from cold_steel.core.build import BuildRecord
 from cold_steel.core.index import GAME
 from cold_steel.ui.conflicts_window import GAME_NAME, kind_label
+from cold_steel.ui.full_text import show_full_text
 
 # The tree shows this many files at most; the filter narrows it down.
 SHOWN = 5000
@@ -29,6 +30,7 @@ class BuildDialog(QDialog):
         self.search = QLineEdit(placeholderText="Filter by file or mod", clearButtonEnabled=True)
         self.search.textChanged.connect(self._fill)
         self.tree = QTreeWidget()
+        show_full_text(self.tree)
         self.tree.setHeaderLabels(["File", "From", "Replaced"])
         self.tree.setRootIsDecorated(False)
         self.tree.setSortingEnabled(True)
