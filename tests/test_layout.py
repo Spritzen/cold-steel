@@ -1,7 +1,11 @@
 """The core never imports Qt, so it can be tested and timed without a window."""
 
+import os
 import subprocess
 import sys
+from pathlib import Path
+
+SRC = Path(__file__).parent.parent / "src"
 
 QT_FREE = [
     "cold_steel",
@@ -49,7 +53,9 @@ def test_core_packages_do_not_import_qt() -> None:
         f"for m in {QT_FREE!r}: __import__(m)\n"
         "print(any(name.startswith('PySide6') for name in sys.modules))\n"
     )
+    # pytest's pythonpath setting doesn't reach a child process, so it's passed on here.
+    env = os.environ | {"PYTHONPATH": str(SRC)}
     out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env
     ).stdout
     assert out.strip() == "False"
