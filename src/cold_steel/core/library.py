@@ -13,7 +13,7 @@ work pays.
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import msgspec
@@ -91,15 +91,20 @@ class Scanner:
 
     steam_dirs: tuple[Path, ...]
     cache_file: Path
+    # Replaces the data folder the game names, when set.
+    game_data_dir: Path | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Scanner:
         chosen = (Path(settings.steam_dir),) if settings.steam_dir else ()
-        return cls(chosen + DEFAULT_STEAM_DIRS, paths.cache_dir() / "mods.msgpack")
+        data = Path(settings.game_data_dir) if settings.game_data_dir else None
+        return cls(chosen + DEFAULT_STEAM_DIRS, paths.cache_dir() / "mods.msgpack", data)
 
     def __call__(self, ctx: JobContext) -> Library:
         ctx.progress(0, 0, "Finding Stellaris")
         game = find_game(self.steam_dirs)
+        if self.game_data_dir is not None:
+            game = replace(game, data_dir=self.game_data_dir)
         return scan_library(ctx, game, self.cache_file)
 
 

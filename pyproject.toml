@@ -1,15 +1,26 @@
 # Project info and tool settings only. Packages come from pacman, not pip
-# (decision 2), so there are no dependency lists here.
+# (decision 2), so there are no dependency lists here. The PKGBUILD in
+# packaging/ lists them instead.
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cold-steel"
-version = "0.0.1"
+dynamic = ["version"]
 description = "A native Linux mod manager for Stellaris"
 license = "MIT"
 requires-python = ">=3.14"
 
 [project.scripts]
 cold-steel = "cold_steel.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "cold_steel.__version__" }
+
+[tool.setuptools.package-data]
+cold_steel = ["data/*"]
 
 [tool.ruff]
 line-length = 100

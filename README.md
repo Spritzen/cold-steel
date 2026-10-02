@@ -2,53 +2,198 @@
 
 A mod manager for **Stellaris** that runs natively on Linux.
 
-Cold Steel shows every mod you have installed and the playsets you made in the
-Paradox launcher, all in one fast window. It's built for the native Linux
-version of the game, so there's no Wine or Proton involved.
+Cold Steel shows every mod you have installed and your playsets, all in one
+fast window. It shows which mods are broken and where mods clash, helps you
+fix the clashes, and starts the game. It's built for the native Linux version
+of the game, so there's no Wine or Proton involved.
 
-> **Early days.** Cold Steel can build playsets, start the game with them,
-> show you which mods are broken, and show and fix where mods clash. It backs
-> up every Paradox file before it changes one.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/main-dark.png">
+  <img alt="The main window: playsets on the left, the mods in the chosen playset on the right" src="screenshots/main-light.png">
+</picture>
 
-## What it does today
+## Install
 
-- **Finds Stellaris on its own.** It looks through your Steam libraries, even
-  ones on other drives, and shows the game version.
-- **Lists all your mods.** Workshop mods and local mods, with their picture,
-  version, tags, and the game version each one was made for.
-- **Flags outdated mods.** Mods made for an older version of Stellaris are
-  shown in red.
-- **Shows your playsets.** The playsets from the Paradox launcher, in the same
-  order, with each playset's mods in load order. It also tells you if a
-  playset includes a mod you've since unsubscribed from.
-- **Make and edit playsets.** Drag mods into load order, turn them on and
-  off, choose DLC, then press **Play** to start the game with that playset.
-  You can import playsets from the launcher and export them back.
-- **Spots broken mods.** Each mod gets a health badge. Click it to see each
-  problem, with the file and line: a localisation file the game will ignore,
-  a line it will skip, a stray `}` that cuts a file short.
-- **Shows which mod caused each error.** After you play, **Errors** reads the
-  game's `error.log` and groups the errors by the mod they came from.
-- **Shows where mods clash.** Press **Conflicts** to see every place two mods
-  change the same file or the same thing in the game, like a technology, an
-  event or a line of text. It tells you which mod wins and why, and shows the
-  versions side by side with the differences highlighted. You can search for
-  anything in the playset by name. The rules for who wins were checked
-  against the game itself.
-- **Fixes clashes.** For each clash, pick the version you want, keep the one
-  that wins now, or write your own. Ignore the ones you don't care about.
-  **Generate patch mod** turns your choices into a small mod that loads last,
-  so the game uses them. If a mod updates a thing you chose for, Cold Steel
-  asks you to look at it again.
-- **Search and filter.** By name or tag, outdated mods only, mods with
-  problems, or mods that are or aren't in a playset.
-- **Opens quickly.** It remembers what it has already read, so with 50+ mods
-  the list appears in about half a second.
+You need **Arch Linux** (or an Arch-based distro such as CachyOS, EndeavourOS
+or Manjaro), with Stellaris installed through Steam.
 
-## Coming next
+1. Download the package, `cold-steel-<version>-1-any.pkg.tar.zst`, from the
+   [latest release](https://github.com/Spritzen/cold-steel/releases/latest).
+2. Install it with pacman, from the folder you downloaded it to:
 
-- Pin mod versions, and merge a whole playset into one mod
-- An Arch package you can install with pacman
+   ```sh
+   sudo pacman -U ./cold-steel-*.pkg.tar.zst
+   ```
+
+   pacman also installs what Cold Steel needs, such as PySide6, from Arch's
+   own repos.
+
+Then start **Cold Steel** from your app menu (it's under Games), or run
+`cold-steel` in a terminal.
+
+**To update,** download the new release's package and install it the same
+way. Your settings and playsets are kept.
+
+**To remove it,** run `sudo pacman -R cold-steel`. Your playsets and settings
+stay in the folders listed under [Your files are safe](#your-files-are-safe).
+Delete those too if you want everything gone.
+
+### Build the package yourself
+
+If you'd rather not install a downloaded package, build it from the release's
+source code:
+
+```sh
+sudo pacman -S --needed git base-devel
+git clone https://github.com/Spritzen/cold-steel.git
+cd cold-steel/packaging
+makepkg -si
+```
+
+### Run from source
+
+To try the latest code instead:
+
+```sh
+sudo pacman -S --needed git python pyside6 qt6-wayland python-msgspec python-xxhash
+git clone https://github.com/Spritzen/cold-steel.git
+cd cold-steel
+make run
+```
+
+## First start
+
+The first time it opens, Cold Steel shows what it reads and what it changes.
+Then it finds Stellaris through your Steam libraries, even ones on other
+drives, and lists your mods. It copies in the playsets you made in the
+Paradox launcher.
+
+**If it can't find Stellaris:** open **File › Settings** and choose your Steam
+folder (the one holding `steamapps`). You'll need this if Steam is a Flatpak
+or Snap, or somewhere unusual.
+
+**Cold Steel needs the native Linux version of Stellaris.** If Steam Play
+(Proton) is turned on for Stellaris, turn it off in the game's Steam
+properties.
+
+## Using it
+
+### Playsets
+
+A playset is a list of mods, in the order the game loads them. Pick one on the
+left to see its mods. Then you can:
+
+- **Turn mods on and off** with the tick box, and **drag** them into order.
+- **Add mods** from **All mods**: select them, right-click, **Add to playset**.
+- **Sort** puts mods that others depend on first, then follows common load-order
+  rules.
+- **DLC…** chooses which DLC the playset loads.
+- **▶ Play** starts Stellaris with the playset. The Paradox launcher isn't needed.
+
+The buttons under the list make, copy, rename and delete playsets. The
+playset you last played is in bold.
+
+### Find broken mods
+
+Each mod has a **Health** column. **OK** means its files look fine. Click a
+warning or error to see each problem, with the file and line: a localisation
+file the game will ignore, a line it will skip, a stray `}` that cuts a file
+short. Mods made for an older game version are shown in red under
+**Made for**.
+
+After you play, **Errors** reads the game's `error.log` and groups the errors
+by the mod that caused them. When you start the game from Cold Steel, it reads
+the log for you when the game closes.
+
+### See and fix clashes
+
+**Conflicts** shows every place two mods in the playset change the same thing:
+a technology, an event, a line of text, or a whole file. It says which mod
+wins and why, and shows the versions side by side with the differences
+highlighted.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/conflicts-dark.png">
+  <img alt="The Conflicts window: the list of clashes, and two versions side by side" src="screenshots/conflicts-light.png">
+</picture>
+
+For each clash you can **use** either version, **keep the winner**, or
+**write your own**. You can also **ignore** clashes you don't care about.
+Then press **Generate patch mod**. Cold Steel writes your choices into a small
+mod that loads last, so the game uses them. If a mod later changes something
+you chose for, Cold Steel asks you to look at it again.
+
+### Pin mod versions
+
+A Steam update can change a mod halfway through a campaign. **Pins…** saves
+a copy of the playset's Workshop mods as they are now, and plays those copies
+until you say otherwise. When Steam has an update, Cold Steel tells you and
+shows what changed. You can accept the update or keep your copy.
+
+### Build one mod
+
+**Build** merges the whole playset, with its patch mod, into one mod, and
+makes a playset that plays just that mod. The build report shows where every
+file came from. A built mod is for your own use only. It contains other
+authors' work, so don't upload it.
+
+### Share playsets
+
+- **Playset › Import from launcher** and **Export to launcher** copy playsets
+  between Cold Steel and the Paradox launcher.
+- **Save to file** and **Load from file** share a playset with a friend. The
+  file uses the launcher's own format, and Irony Mod Manager's exports load
+  too.
+
+### Settings
+
+**File › Settings** sets where Steam is, where Stellaris keeps its data, and
+the theme. By default Cold Steel follows your desktop's light or dark theme.
+It also shows where Cold Steel keeps its own files.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/settings-dark.png">
+  <img alt="The Settings window" src="screenshots/settings-light.png">
+</picture>
+
+### Keyboard shortcuts
+
+**Help › Keyboard shortcuts** (F1) lists them all. The main ones:
+
+| Keys | Does |
+|---|---|
+| Ctrl+Enter | Play the selected playset |
+| Ctrl+K | Conflicts |
+| Ctrl+E | Errors from the last game |
+| Ctrl+F | Search mods |
+| Ctrl+N | New playset |
+| Ctrl+D | Copy playset |
+| F2 | Rename playset |
+| Ctrl+L | Sort load order |
+| Ctrl+B | Build one mod |
+| F5 | Rescan mods |
+| Ctrl+, | Settings |
+
+## Your files are safe
+
+Cold Steel never changes Steam's folders or your mods, and never downloads
+anything. It changes Paradox's files only when you ask:
+
+- **Play** writes `dlc_load.json`, which tells the game what to load. For a mod
+  the launcher hasn't seen yet, it also adds the `.mod` file the game needs.
+- **Export to launcher** writes the playset into the launcher's database.
+- **Generate patch mod**, **Build** and **Pins** add their own mods to the
+  game's `mod` folder, as links. Their names start with `cold_steel_`.
+  Deleting the playset removes them.
+
+Each Paradox file is backed up first, and nothing is written while the
+launcher or the game is open.
+
+| Folder | What's in it |
+|---|---|
+| `~/.config/cold-steel/` | Your settings |
+| `~/.local/share/cold-steel/` | Your playsets, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
+| `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## What it won't do
 
@@ -56,51 +201,6 @@ version of the game, so there's no Wine or Proton involved.
   them up from there.
 - **Run other Paradox games.** It's for Stellaris only.
 - **Run on Windows or macOS.**
-
-## Try it
-
-You need **Arch Linux** (or an Arch-based distro), with Stellaris installed
-through Steam. There's no package yet, so you run it from the source code.
-
-1. Install what it needs:
-
-   ```sh
-   sudo pacman -S --needed git python pyside6 qt6-wayland python-msgspec python-xxhash
-   ```
-
-2. Download Cold Steel and start it:
-
-   ```sh
-   git clone https://github.com/Spritzen/cold-steel.git
-   cd cold-steel
-   make run
-   ```
-
-### If it can't find Stellaris
-
-Cold Steel looks for Steam in the usual place (`~/.local/share/Steam`). If you
-installed Steam as a Flatpak or Snap, or somewhere else, choose
-**File › Set Steam folder…** and pick the folder that holds `steamapps`.
-
-Cold Steel needs the native Linux version of Stellaris. If Steam Play
-(Proton) is turned on for Stellaris, turn it off in the game's Steam
-properties.
-
-## Your files are safe
-
-Cold Steel never changes Steam's folders or your mods. It changes Paradox's
-files only when you ask: **Play** writes `dlc_load.json` (and a `.mod` file
-for a mod the launcher hasn't seen yet), and **Export to launcher** writes the
-launcher's playsets. Each file is backed up first, and
-nothing is written while the launcher or the game is open. **Generate patch
-mod** adds two things of its own to the game's `mod` folder: a link to the
-patch, and its `.mod` file. Deleting the playset removes them.
-
-| Folder | What's in it |
-|---|---|
-| `~/.config/cold-steel/` | Your settings |
-| `~/.local/share/cold-steel/` | Your playsets, your choices for each playset's clashes, the patch mods, and backups of the Paradox files |
-| `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## For developers
 
@@ -116,44 +216,38 @@ sudo pacman -S --needed python-pytest python-pytest-qt python-pytest-benchmark r
 | `make test` | Just the tests |
 | `make bench` | Just the timing tests |
 | `make format` | Fix formatting |
+| `make package` | Build the Arch package from the last commit, and check it with `namcap` |
+| `make screenshots` | Retake the screenshots above from your own install |
 
 The tests use a small fake Stellaris install in `tests/fixtures/`, never your
-own.
+own. The PKGBUILD is in `packaging/`.
 
-## Add a desktop icon
+### A desktop icon when running from source
 
-To start Cold Steel from your desktop or app menu instead of a terminal, run
-these commands inside the `cold-steel` folder.
+The package adds Cold Steel to your app menu. When running from source, you
+can add a desktop icon named `cold-steel-dev` instead. It stays out of the app
+menu, so it never clashes with an installed package.
 
-These steps are for **Arch Linux with the KDE Plasma desktop** (tested on
-CachyOS with Plasma). They use the standard Linux desktop file format, so
-GNOME, Xfce and other desktops should work too, but we haven't tested them.
+Run these commands inside the `cold-steel` folder. They were tested on
+CachyOS with KDE Plasma, and use the standard desktop file format, so other
+desktops should work too.
 
 ```sh
 install -Dm644 src/cold_steel/data/cold-steel.svg \
   ~/.local/share/icons/hicolor/scalable/apps/cold-steel.svg
 
-mkdir -p ~/.local/share/applications
-cat > ~/.local/share/applications/cold-steel.desktop <<EOF
+cat > ~/Desktop/cold-steel-dev.desktop <<EOF
 [Desktop Entry]
 Type=Application
-Name=Cold Steel
-GenericName=Stellaris Mod Manager
-Comment=Manage Stellaris mods and playsets
+Name=cold-steel-dev
+Comment=Cold Steel, run from source
 Exec=env PYTHONPATH=$PWD/src python3 -m cold_steel
 Path=$PWD
 Icon=cold-steel
 Terminal=false
-Categories=Game;
-StartupWMClass=cold-steel
 EOF
-
-install -Dm755 ~/.local/share/applications/cold-steel.desktop ~/Desktop/cold-steel.desktop
+chmod +x ~/Desktop/cold-steel-dev.desktop
 ```
-
-Cold Steel now shows up under **Games** in your app menu and as an icon on
-your desktop. The first time you double-click the desktop icon, your desktop
-may ask whether to trust it. Choose **Allow launching**.
 
 If you move the `cold-steel` folder later, run the commands again from its
 new place.

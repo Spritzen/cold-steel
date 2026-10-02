@@ -6,7 +6,7 @@ or ignore it. The main window turns the choices into the patch mod.
 
 from collections.abc import Callable, Iterable
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPalette, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -895,11 +895,25 @@ class SideBySide(QWidget):
         self.left.setPlainText(f"Couldn't compare these versions: {text}")
 
     def show_pair(self, pair: Pair) -> None:
-        dark = self.palette().color(QPalette.ColorRole.Base).lightness() < 128
-        removed = QColor("#5c2b2b" if dark else "#fbe3e3")
-        added = QColor("#2b4d2f" if dark else "#e1f5e1")
+        removed, added = self._colours()
         self._show(self.left, self.left_label, pair.left, removed)
         self._show(self.right, self.right_label, pair.right, added)
+
+    def _colours(self) -> tuple[QColor, QColor]:
+        """Backgrounds for removed and added lines, to suit a light or dark theme."""
+        dark = self.palette().color(QPalette.ColorRole.Base).lightness() < 128
+        return QColor("#5c2b2b" if dark else "#fbe3e3"), QColor("#2b4d2f" if dark else "#e1f5e1")
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 (Qt override)
+        super().changeEvent(event)
+        if event.type() != QEvent.Type.PaletteChange:
+            return
+        # The theme changed: recolour the highlighted lines where they are.
+        for pane, colour in zip((self.left, self.right), self._colours(), strict=True):
+            selections = pane.extraSelections()
+            for selection in selections:
+                selection.format.setBackground(colour)
+            pane.setExtraSelections(selections)
 
     @staticmethod
     def _show(pane: QPlainTextEdit, label: QLabel, version: Version, colour: QColor) -> None:

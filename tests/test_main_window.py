@@ -2,11 +2,15 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtGui import QAction
+from PySide6.QtTest import QTest
 from pytestqt.qtbot import QtBot
 
 from cold_steel.core import playsets as ops
 from cold_steel.core.library import Scanner
+from cold_steel.store.settings import Settings
 from cold_steel.ui.conflicts_window import ConflictsWindow
+from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership
 from conftest import SampleInstall
@@ -773,3 +777,39 @@ def test_build_a_playset_into_one_mod(qtbot: QtBot, clashing: MainWindow) -> Non
     assert [e.name for e in built.entries] == ["Cold Steel build: Main Playset"]
     assert built.entries[0].key in {m.key for m in clashing.library.mods}
     assert clashing.report_action.isEnabled()
+
+
+# Phase 7: settings, shortcuts, help
+
+
+def test_settings_are_sent_only_when_changed(
+    window: MainWindow, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[Settings] = []
+    window.settings_chosen.connect(sent.append)
+
+    monkeypatch.setattr(window, "ask_settings", lambda: Settings())
+    window.edit_settings()
+    assert sent == []
+
+    monkeypatch.setattr(window, "ask_settings", lambda: Settings(theme="dark"))
+    window.edit_settings()
+    assert sent == [Settings(theme="dark")]
+    assert window.settings == Settings(theme="dark")
+
+
+def test_every_shortcut_is_listed_once(window: MainWindow) -> None:
+    rows = shortcut_rows(window.menuBar())
+    keys = [key for _, _, key in rows]
+    assert len(keys) == len(set(keys)), "two actions share a shortcut"
+    assert ("Playset", "Play", "Ctrl+Return") in rows
+    # Every action with a shortcut is in a menu, so the list is complete.
+    with_shortcut = [a for a in window.findChildren(QAction) if not a.shortcut().isEmpty()]
+    assert len(with_shortcut) == len(rows)
+
+
+def test_ctrl_f_goes_to_the_search_box(window: MainWindow, qtbot: QtBot) -> None:
+    window.activateWindow()
+    window.table.setFocus()
+    QTest.keyClick(window, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+    assert window.search.hasFocus()

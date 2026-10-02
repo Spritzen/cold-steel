@@ -24,3 +24,9 @@ def test_env_overrides_and_relative_values_are_ignored(
 
     assert paths.config_dir() == Path("/etc/xdg-test/cold-steel")
     assert paths.cache_dir() == tmp_path / ".cache/cold-steel"
+
+
+def test_paths_are_shown_from_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert paths.shown(tmp_path / ".config/cold-steel") == "~/.config/cold-steel"
+    assert paths.shown(Path("/mnt/games")) == "/mnt/games"
