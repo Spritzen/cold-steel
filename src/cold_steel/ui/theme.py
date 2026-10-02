@@ -2,6 +2,9 @@
 
 Qt is asked for the colour scheme, but a desktop's platform theme (KDE's
 among them) may ignore that, so a forced scheme also sets its own palette.
+
+Dark themes draw text near pure white, which glares. Ours, and the desktop's
+when it's dark, use DARK_TEXT instead.
 """
 
 from PySide6.QtCore import Qt
@@ -12,18 +15,22 @@ from cold_steel.store.settings import Theme
 
 Role = QPalette.ColorRole
 
+# Text on a dark background: softer than white, about 11:1 against Breeze Dark.
+DARK_TEXT = "#d3d6d9"
+TEXT_ROLES = (Role.WindowText, Role.Text, Role.ButtonText, Role.ToolTipText)
+
 # (role, light, dark)
 COLOURS: tuple[tuple[QPalette.ColorRole, str, str], ...] = (
     (Role.Window, "#eff0f1", "#2a2e32"),
-    (Role.WindowText, "#232629", "#e8e9ea"),
+    (Role.WindowText, "#232629", DARK_TEXT),
     (Role.Base, "#ffffff", "#1d2023"),
     (Role.AlternateBase, "#f4f5f6", "#24282c"),
     (Role.ToolTipBase, "#f7f7f7", "#31363b"),
-    (Role.ToolTipText, "#232629", "#e8e9ea"),
+    (Role.ToolTipText, "#232629", DARK_TEXT),
     (Role.PlaceholderText, "#7f8c8d", "#8a9196"),
-    (Role.Text, "#232629", "#e8e9ea"),
+    (Role.Text, "#232629", DARK_TEXT),
     (Role.Button, "#fcfcfc", "#31363b"),
-    (Role.ButtonText, "#232629", "#e8e9ea"),
+    (Role.ButtonText, "#232629", DARK_TEXT),
     (Role.BrightText, "#ffffff", "#ffffff"),
     (Role.Light, "#ffffff", "#40464c"),
     (Role.Midlight, "#f4f5f6", "#363b40"),
@@ -49,11 +56,23 @@ def palette(dark: bool) -> QPalette:
     return result
 
 
+def soft_text() -> QPalette:
+    """A palette that sets only the text colours, for laying over a dark desktop's."""
+    result = QPalette()
+    for role in TEXT_ROLES:
+        for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+            result.setColor(group, role, QColor(DARK_TEXT))
+    return result
+
+
 def apply_theme(app: QApplication, theme: Theme) -> None:
+    """Call again when the desktop switches between light and dark."""
     hints = app.styleHints()
     if theme == "system":
         hints.unsetColorScheme()
         app.setPalette(QPalette())  # nothing set: the desktop's palette again
+        if app.palette().color(Role.Window).lightness() < 128:
+            app.setPalette(soft_text())  # the rest still follows the desktop
         return
     dark = theme == "dark"
     hints.setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)

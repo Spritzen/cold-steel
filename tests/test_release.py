@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
@@ -13,7 +13,7 @@ from cold_steel.core.library import Scanner
 from cold_steel.store.settings import Settings, load_settings
 from cold_steel.ui.help import WelcomeDialog, welcome_text
 from cold_steel.ui.settings_dialog import SettingsDialog
-from cold_steel.ui.theme import apply_theme
+from cold_steel.ui.theme import DARK_TEXT, apply_theme, soft_text
 from conftest import SampleInstall
 
 
@@ -62,12 +62,26 @@ def test_theme_can_be_forced_and_given_back(qapp: QApplication) -> None:
     try:
         apply_theme(qapp, "dark")
         assert window_lightness() < 128
+        assert qapp.palette().color(QPalette.ColorRole.Text) == QColor(DARK_TEXT)
         apply_theme(qapp, "light")
         assert window_lightness() > 128
         apply_theme(qapp, "system")
         assert qapp.palette() == system
     finally:
         apply_theme(qapp, "system")
+
+
+def test_soft_text_leaves_the_desktops_other_colours(qapp: QApplication) -> None:
+    over = soft_text()
+    desktop = qapp.palette()
+    merged = over.resolve(desktop)
+    assert merged.color(QPalette.ColorRole.WindowText) == QColor(DARK_TEXT)
+    assert merged.color(QPalette.ColorRole.Window) == desktop.color(QPalette.ColorRole.Window)
+    # Disabled text keeps the desktop's greyed colour.
+    disabled = QPalette.ColorGroup.Disabled
+    assert merged.color(disabled, QPalette.ColorRole.Text) == desktop.color(
+        disabled, QPalette.ColorRole.Text
+    )
 
 
 def test_welcome_says_what_is_changed(qtbot: QtBot) -> None:

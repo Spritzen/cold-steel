@@ -29,6 +29,13 @@ def run(argv: list[str]) -> int:
             window.set_scan(Scanner.from_settings(settings))
 
     window.settings_chosen.connect(use_settings)
+
+    def desktop_theme_changed() -> None:
+        if settings.theme == "system":
+            apply_theme(app, "system")
+
+    # The desktop switched between light and dark: "system" follows it.
+    app.styleHints().colorSchemeChanged.connect(desktop_theme_changed)
     window.show()
     if not settings.welcomed:
         WelcomeDialog(window).exec()
