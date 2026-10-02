@@ -5,8 +5,18 @@ from pathlib import Path
 from typing import Any
 
 from msgspec.structs import replace as msgspec_replace
-from PySide6.QtCore import QModelIndex, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QImage, QKeySequence
+from PySide6.QtCore import QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QTextLayout,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -26,7 +36,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyleOptionViewItem,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -80,6 +93,7 @@ from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
 from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
+from cold_steel.ui import icons
 from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
@@ -94,6 +108,10 @@ type Scan = Callable[[JobContext], Library]
 type Launch = Callable[[PlayPlan, Game, Path], Any]
 
 ROW_HEIGHT = SHOWN_SIZE.height() + 4
+# Name and Tags wrap onto this many lines; ROW_HEIGHT has room for two.
+TEXT_LINES = 2
+# The widest the Health column gets.
+WIDEST_HEALTH = "99 warnings"
 
 
 class MainWindow(QMainWindow):
@@ -165,6 +183,8 @@ class MainWindow(QMainWindow):
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
         self._game_timer.timeout.connect(self._check_game)
+        # The window is sized to the mod list once, when it's first shown.
+        self._fitted = False
         self._thumbnail_cache = thumbnail_cache or paths.cache_dir() / "thumbnails"
         self._playsets_path = playsets_path or playsets_file()
         self.backup_dir = backup_dir or paths.data_dir() / "backups"
@@ -252,12 +272,19 @@ class MainWindow(QMainWindow):
         self.playset_list.currentRowChanged.connect(self._playset_selected)
         self.playset_list.itemDoubleClicked.connect(lambda _: self.rename_playset())
 
+        # Equal space before, between and after the buttons.
         sidebar_buttons = QHBoxLayout()
-        for text, act in (("New", self.new_action), ("Copy", self.copy_action)):
-            sidebar_buttons.addWidget(self._button(text, act))
-        sidebar_buttons.addWidget(self._button("Rename", self.rename_action))
-        sidebar_buttons.addWidget(self._button("Delete", self.delete_action))
-        sidebar = QWidget()
+        sidebar_buttons.setSpacing(0)
+        for act, name, draw in (
+            (self.new_action, "document-new", icons.draw_new),
+            (self.copy_action, "edit-copy", icons.draw_copy),
+            (self.rename_action, "edit-rename", icons.draw_rename),
+            (self.delete_action, "edit-delete", icons.draw_delete),
+        ):
+            sidebar_buttons.addStretch()
+            sidebar_buttons.addWidget(self._icon_button(act, icons.theme_icon(name, draw)))
+        sidebar_buttons.addStretch()
+        sidebar = self.sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.addWidget(self.playset_list)
@@ -321,7 +348,7 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setIconSize(SHOWN_SIZE)
-        self.table.setWordWrap(False)
+        self.table.setWordWrap(True)
         self.table.setAlternatingRowColors(True)
         self.table.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -334,15 +361,17 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(Column.NAME, QHeaderView.ResizeMode.Stretch)
-        for col in (
-            Column.POSITION,
-            Column.HEALTH,
-            Column.VERSION,
-            Column.SUPPORTED,
-            Column.SOURCE,
-        ):
+        for col in (Column.POSITION, Column.VERSION, Column.SUPPORTED, Column.SOURCE):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        header.resizeSection(Column.TAGS, 240)
+        # Health starts as "…", so it gets room for its widest text up front.
+        header.resizeSection(
+            Column.HEALTH,
+            max(
+                header.sectionSizeHint(Column.HEALTH),
+                self.table.fontMetrics().horizontalAdvance(WIDEST_HEALTH) + 12,
+            ),
+        )
+        header.resizeSection(Column.TAGS, 240)  # until _fit_columns measures the tags
 
         right = QWidget()
         layout = QVBoxLayout(right)
@@ -354,12 +383,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.pin_label)
         layout.addWidget(self.table)
 
-        splitter = QSplitter()
-        splitter.addWidget(sidebar)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([260, 940])
-        return splitter
+        self.splitter = QSplitter()
+        self.splitter.addWidget(sidebar)
+        self.splitter.addWidget(right)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([200, 1000])
+        return self.splitter
 
     @staticmethod
     def _button(text: str, action: QAction) -> QPushButton:
@@ -369,6 +398,21 @@ class MainWindow(QMainWindow):
         button.clicked.connect(action.trigger)
         action.enabledChanged.connect(button.setEnabled)
         button.setEnabled(action.isEnabled())
+        return button
+
+    @staticmethod
+    def _icon_button(action: QAction, icon: QIcon) -> QToolButton:
+        """An icon-only button for `action`. Its name shows on hover."""
+        action.setIcon(icon)
+        tip = action.text().replace("&", "")
+        if not action.shortcut().isEmpty():
+            shortcut = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            tip += f" ({shortcut})"
+        action.setToolTip(tip)
+        button = QToolButton()
+        button.setDefaultAction(action)
+        button.setAutoRaise(True)
+        button.setIconSize(QSize(16, 16))
         return button
 
     def _build_message_page(self) -> QWidget:
@@ -442,6 +486,7 @@ class MainWindow(QMainWindow):
         self.filter.set_playsets(playsets)
         self._fill_playsets()
         self._fill_tags(library)
+        self._fit_columns()
 
         self.problems_label.setText("\n".join(problems))
         self.problems_label.setVisible(bool(problems))
@@ -455,6 +500,92 @@ class MainWindow(QMainWindow):
         self._check_health(library)
         self._check_pins(library)
         self.library_shown.emit(library)
+
+    def _fit_columns(self) -> None:
+        """Make Tags wide enough for every mod's tags on two lines. The first
+        time, also size the window and sidebar so nothing is cut off."""
+        header = self.table.horizontalHeader()
+        header.resizeSection(Column.TAGS, self._wrapped_width(Column.TAGS))
+        if self._fitted:
+            return
+        self._fitted = True
+        fm = self.playset_list.fontMetrics()
+        bold = QFont(self.playset_list.font())
+        bold.setBold(True)
+        bold_fm = QFontMetrics(bold)
+        names = [self.playset_list.item(r).text() for r in range(self.playset_list.count())]
+        sidebar = max(
+            (bold_fm.horizontalAdvance(n) for n in names), default=fm.horizontalAdvance("M" * 12)
+        )
+        sidebar += 2 * self.playset_list.frameWidth() + 16  # item margins
+        sidebar = max(sidebar, self.sidebar.minimumSizeHint().width())
+        sidebar = min(sidebar, 260)
+
+        # The sized-to-fit columns may be hidden or not laid out yet, so they're measured.
+        fitted = (Column.POSITION, Column.VERSION, Column.SUPPORTED, Column.SOURCE)
+        columns = (
+            self._wrapped_width(Column.NAME)
+            + header.sectionSize(Column.HEALTH)
+            + header.sectionSize(Column.TAGS)
+            + sum(self._content_width(c) for c in fitted)
+        )
+        table = (
+            columns
+            + 2 * self.table.frameWidth()
+            + self.table.verticalScrollBar().sizeHint().width()
+        )
+        chrome = self.width() - self.splitter.width() + self.splitter.handleWidth()
+        wanted = sidebar + table + chrome + 4  # a little slack against rounding
+        screen = self.screen().availableGeometry()
+        width = max(self.width(), min(wanted, screen.width()))
+        self.resize(width, self.height())
+        self.splitter.setSizes([sidebar, width - sidebar])
+
+    def _content_width(self, col: Column) -> int:
+        """The width a sized-to-fit column takes in any view, measured over every
+        mod, not just the ones shown."""
+        header = self.table.horizontalHeader()
+        hidden = header.isSectionHidden(col)
+        header.setSectionHidden(col, False)
+        widest = header.sectionSizeHint(col)
+        header.setSectionHidden(col, hidden)
+        delegate = self.table.itemDelegate()
+        option = QStyleOptionViewItem()
+        self.table.initViewItemOption(option)
+        for row in range(self.model.rowCount()):
+            widest = max(widest, delegate.sizeHint(option, self.model.index(row, col)).width())
+        return widest
+
+    def _wrapped_width(self, col: Column) -> int:
+        """The narrowest the column can be while every mod's text fits in TEXT_LINES lines."""
+        # Ask the style where a cell puts its text. A Name cell always counts a
+        # checkbox and a thumbnail: thumbnails may not be loaded yet, and only a
+        # playset has checkboxes.
+        style = self.table.style()
+        option = QStyleOptionViewItem()
+        self.table.initViewItemOption(option)
+        option.rect = QRect(0, 0, 1000, ROW_HEIGHT)
+        option.text = "x"
+        option.features |= QStyleOptionViewItem.ViewItemFeature.HasDisplay
+        if col == Column.NAME:
+            option.features |= (
+                QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+                | QStyleOptionViewItem.ViewItemFeature.HasDecoration
+            )
+            option.decorationSize = SHOWN_SIZE
+        text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, option, self.table)
+        # The text is drawn inset by this much on each side.
+        margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, self.table) + 1
+        beside = option.rect.width() - text_rect.width() + 2 * margin
+
+        widest = self.table.horizontalHeader().sectionSizeHint(col)
+        for row in range(self.model.rowCount()):
+            index = self.model.index(row, col)
+            text = index.data() or ""
+            if text:
+                font = index.data(Qt.ItemDataRole.FontRole) or self.table.font()
+                widest = max(widest, beside + _wrap_width(font, text, TEXT_LINES) + 1)
+        return widest
 
     def _load_thumbnails(self, library: Library) -> None:
         if self._thumbnail_task is not None:
@@ -1299,3 +1430,30 @@ class MainWindow(QMainWindow):
         self.tasks.cancel_all()
         self.tasks.wait(5000)
         super().closeEvent(event)
+
+
+def _wrap_width(font: QFont, text: str, lines: int) -> int:
+    """The narrowest width that wraps `text` onto `lines` lines, as the table wraps it."""
+    full = QFontMetrics(font).horizontalAdvance(text)
+    low, high = full // lines, full  # high always fits
+    while low < high:
+        mid = (low + high) // 2
+        if _line_count(font, text, mid) <= lines:
+            high = mid
+        else:
+            low = mid + 1
+    return high
+
+
+def _line_count(font: QFont, text: str, width: int) -> int:
+    layout = QTextLayout(text, font)
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    count = 0
+    while (line := layout.createLine()).isValid():
+        line.setLineWidth(width)
+        count += 1
+    layout.endLayout()
+    return count
