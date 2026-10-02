@@ -5,6 +5,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QHeaderView,
@@ -17,13 +18,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cold_steel.core.errors import GAME, ErrorReport, GameError
+from cold_steel.core.errors import GAME, ErrorGroup, ErrorReport, GameError
 from cold_steel.ui.full_text import show_full_text
 
 ERROR_ROLE = Qt.ItemDataRole.UserRole
 NOT_LOADED = (
     "This mod wasn't loaded in this game. The game still reads every .mod file as it "
     "starts, and logs problems in them."
+)
+OVERRIDES_TIP = (
+    "Lines like \u201cObject with key: x already exists\u201d. They say a mod replaced "
+    "something the game or another mod defines, which is what mods do."
 )
 
 
@@ -45,6 +50,9 @@ class ErrorsDialog(QDialog):
         )
         self.stale.setStyleSheet("color: #d9534f;")
         self.stale.hide()
+        self.overrides_box = QCheckBox("Show overrides")
+        self.overrides_box.setToolTip(OVERRIDES_TIP)
+        self.overrides_box.toggled.connect(self._fill_tree)
 
         self.tree = QTreeWidget()
         show_full_text(self.tree)
@@ -76,14 +84,22 @@ class ErrorsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.summary)
         layout.addWidget(self.stale)
+        layout.addWidget(self.overrides_box)
         layout.addWidget(splitter)
         layout.addWidget(buttons)
 
     def set_report(self, report: ErrorReport) -> None:
         self.report = report
+        self.stale.setVisible(report.stale)
+        self.overrides_box.setVisible(bool(report.overrides))
+        self._fill_tree()
+
+    def _fill_tree(self) -> None:
+        report = self.report
         self.tree.clear()
         self.detail.clear()
-        self.stale.setVisible(report.stale)
+        if report is None:
+            return
         if not report.written:
             self.summary.setText(
                 f"There's no error log yet. The game writes one each time it runs, "
@@ -91,25 +107,36 @@ class ErrorsDialog(QDialog):
             )
             return
         when = datetime.fromtimestamp(report.written).strftime("%H:%M on %d %B")
-        mods = sum(g.key != GAME and g.loaded for g in report.groups)
-        self.summary.setText(
-            f"{report.total} errors from the game run at {when}. "
+        overrides = self.overrides_box.isChecked()
+        groups = [g for g in report.groups if overrides or _shown_total(g, overrides)]
+        mods = sum(g.key != GAME and g.loaded for g in groups)
+        text = (
+            f"{report.problems} errors from the game run at {when}. "
             f"{mods} loaded mod(s) caused some of them. Errors that name no mod file are "
-            "under “Game / unknown”."
-            if report.total
+            "under \u201cGame / unknown\u201d."
+            if report.problems
             else f"No errors from the game run at {when}."
         )
+        if report.overrides:
+            text += (
+                f" The log also has {report.overrides} overrides: a mod replacing something "
+                "the game or another mod defines, which is normal."
+                + ("" if overrides else " Tick Show overrides to list them.")
+            )
+        self.summary.setText(text)
         bold = QFont()
         bold.setBold(True)
-        for group in report.groups:
+        for group in groups:
             name = group.name if group.loaded else f"{group.name} (not loaded)"
-            top = QTreeWidgetItem(self.tree, [name, str(group.total), ""])
+            top = QTreeWidgetItem(self.tree, [name, str(_shown_total(group, overrides)), ""])
             top.setFont(0, bold)
             if not group.loaded:
                 top.setToolTip(0, NOT_LOADED)
                 for col in range(3):
                     top.setForeground(col, QColor(Qt.GlobalColor.gray))
             for error in group.errors:
+                if error.override and not overrides:
+                    continue
                 first = error.text.splitlines()[0] if error.text else ""
                 where = f"{error.file}:{error.line}" if error.line else error.file
                 item = QTreeWidgetItem(top, [first, str(error.count), where])
@@ -131,3 +158,7 @@ class ErrorsDialog(QDialog):
         times = f", {error.count} times" if error.count > 1 else ""
         lines.append(f"Logged at {error.time}{times}, by {error.source} in the game.")
         self.detail.setPlainText("\n".join(lines))
+
+
+def _shown_total(group: ErrorGroup, overrides: bool) -> int:
+    return group.total if overrides else group.total - group.overrides

@@ -34,6 +34,7 @@ from cold_steel.core.compare import TEXT_SUFFIXES, Pair, Version, compare, versi
 from cold_steel.core.conflicts import FILE, Claim, Conflict, Found
 from cold_steel.core.index import GAME, Index
 from cold_steel.core.mods import base_key
+from cold_steel.core.old_copies import OldCopy, describe
 from cold_steel.core.patch import check_own
 from cold_steel.core.resolve import CHOSEN, NONE, STALE, ResolutionBook, State, choices_digest
 from cold_steel.store.resolutions import Ignore
@@ -98,6 +99,7 @@ class ConflictsWindow(QDialog):
         self.current: Conflict | None = None  # the conflict on screen
         self.editing: Conflict | None = None  # the conflict the editor is for
         self._by_key: dict[tuple[str, str], Conflict] = {}
+        self.old_copies: tuple[OldCopy, ...] = ()
 
         self.summary = QLabel(wordWrap=True)
         self.progress = QProgressBar(textVisible=False)
@@ -120,6 +122,17 @@ class ConflictsWindow(QDialog):
         top.addWidget(self.clear_all_button)
         top.addWidget(self.generate_button)
         self.patch_label = QLabel(wordWrap=True)
+        self.old_label = QLabel(wordWrap=True)
+        self.old_label.setStyleSheet("color: #d9534f;")
+        self.old_button = QPushButton("Old copies…")
+        self.old_button.setToolTip("Every file replaced by an old copy, and what goes missing")
+        self.old_button.clicked.connect(self.show_old_copies)
+        self.old_row = QWidget()
+        old_row = QHBoxLayout(self.old_row)
+        old_row.setContentsMargins(0, 0, 0, 0)
+        old_row.addWidget(self.old_label, 1)
+        old_row.addWidget(self.old_button, 0, Qt.AlignmentFlag.AlignTop)
+        self.old_row.hide()
 
         self.search = QLineEdit(
             placeholderText="Find any object or file in this playset by name",
@@ -289,6 +302,7 @@ class ConflictsWindow(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(self.patch_label)
+        layout.addWidget(self.old_row)
         layout.addLayout(filters)
         layout.addWidget(splitter, 1)
         self._show_claims(None, (), "")
@@ -312,11 +326,13 @@ class ConflictsWindow(QDialog):
         names: dict[str, str],
         mod: str | None = None,
         choices: ResolutionBook | None = None,
+        old_copies: tuple[OldCopy, ...] = (),
     ) -> None:
-        """Show a playset's conflicts, and the choices made for them. `mod` picks
-        that mod in the mod filter."""
+        """Show a playset's conflicts, the choices made for them, and its old
+        copies. `mod` picks that mod in the mod filter."""
         self.progress.hide()
         self.found, self.index, self.choices = found, index, choices
+        self.old_copies = old_copies
         self._by_key = {(c.kind, c.key): c for c in found.conflicts}
         if self.editing is not None:
             # The editor stays open, on the same conflict as found this time.
@@ -350,6 +366,7 @@ class ConflictsWindow(QDialog):
             current_mod,
         )
         self._show_patch_state()
+        self._show_old_copies()
         self._fill_tree()
 
     @staticmethod
@@ -735,6 +752,31 @@ class ConflictsWindow(QDialog):
             text += f" {stale} need another look, and are left out until you choose again."
         self.patch_label.setText(text)
 
+    # Old copies
+
+    def _show_old_copies(self) -> None:
+        if not self.old_copies:
+            self.old_row.hide()
+            return
+        self.old_label.setText("\n".join(describe(c, self.names) for c in self.old_copies))
+        self.old_row.show()
+
+    def show_old_copies(self) -> None:
+        """Every old copy: the files it replaces and what goes missing."""
+        if not self.old_copies:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("Old copies")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(self.old_label.text())
+        box.setInformativeText(
+            "A mod made for an older game version replaces these files, so what the newer "
+            "files add is lost. A newer version of the older mod may fix it. Otherwise, "
+            "leave it out of the playset, or keep the newer files with a choice here."
+        )
+        box.setDetailedText(old_copies_details(self.old_copies, self.names))
+        box.exec()
+
     # Writing your own version
 
     def start_own(self) -> None:
@@ -938,3 +980,16 @@ class SideBySide(QWidget):
             selection.cursor = cursor
             selections.append(selection)
         pane.setExtraSelections(selections)
+
+
+def old_copies_details(copies: Iterable[OldCopy], names: dict[str, str]) -> str:
+    """Every file and missing object, as plain text."""
+    parts: list[str] = []
+    for copy in copies:
+        mod, replaces = names.get(copy.mod, copy.mod), names.get(copy.replaces, copy.replaces)
+        parts.append(f"{mod} replaces these files of {replaces}:")
+        parts += [f"    {path}" for path in copy.files]
+        parts.append("Missing from the game:")
+        parts += [f"    {kind_label(kind)}: {key}" for kind, key in copy.missing]
+        parts.append("")
+    return "\n".join(parts).rstrip()

@@ -422,6 +422,36 @@ def test_errors_view_groups_the_log_by_mod(
     assert window.errors_button.text() == "Errors (2)"
 
 
+def test_overrides_are_folded_away_until_asked_for(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert window.library is not None
+    logs = window.library.game.data_dir / "logs"
+    logs.mkdir()
+    (logs / "error.log").write_text(
+        "[10:00:00][a.cpp:1]: Something broke\n"
+        "[10:00:01][b.cpp:2]: Object with key: tech_x already exists, using the one at  "
+        "file: common/technology/x.txt line: 1\n"
+        "[10:00:02][c.cpp:3]: Duplicate of x_entity added to entity system\n",
+        "utf-8",
+    )
+    monkeypatch.setattr(window, "show_dialog", lambda dialog: None)
+    with qtbot.waitSignal(window.errors_read, timeout=5000):
+        window.errors_action.trigger()
+    assert window.errors_button.text() == "Errors (1)"
+
+    dialog = window._errors_dialog
+    assert dialog is not None
+    assert dialog.overrides_box.isVisibleTo(dialog)
+    assert "also has 2 overrides" in dialog.summary.text()
+    unknown = dialog.tree.topLevelItem(0)
+    assert unknown is not None and (unknown.text(1), unknown.childCount()) == ("1", 1)
+
+    dialog.overrides_box.setChecked(True)
+    unknown = dialog.tree.topLevelItem(0)
+    assert unknown is not None and (unknown.text(1), unknown.childCount()) == ("3", 3)
+
+
 def test_errors_are_read_when_the_game_closes(
     qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -480,6 +510,46 @@ def clashing(qtbot: QtBot, window: MainWindow, sample_install: SampleInstall) ->
     assert window.selected_playset() is not None
     assert window.selected_playset().name == "Main Playset"  # type: ignore[union-attr]
     return window
+
+
+def test_old_copies_are_named_above_the_mod_list_and_in_conflicts(
+    qtbot: QtBot, window: MainWindow, sample_install: SampleInstall
+) -> None:
+    # My Local is made for v4.4.6 and loads after Alpha (v4.5.*), replacing
+    # Alpha's file with one that lacks alpha_b.
+    name = "common/scripted_triggers/alpha.txt"
+    alpha = sample_install.workshop_dir / "2000000001" / name
+    local = sample_install.data_dir / "mod/my_local" / name
+    for path, data in (
+        (alpha, b"alpha_a = { always = yes }\nalpha_b = { always = yes }\n"),
+        (local, b"alpha_a = { always = no }\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    with qtbot.waitSignal(window.library_shown, timeout=20_000):
+        window.rescan()
+    with qtbot.waitSignal(window.old_copies_shown, timeout=20_000) as checked:
+        window.playset_list.setCurrentRow(1)  # Main Playset
+
+    [copy] = checked.args[0]
+    assert copy.missing == (("common/scripted_triggers", "alpha_b"),)
+    assert window.old_label.isVisibleTo(window)
+    assert window.old_label.text().startswith(
+        "My Local Tweaks, made for v4.4.6, replaces 1 file(s) of Alpha Interface (v4.5.*)"
+    )
+
+    conflicts = open_conflicts(qtbot, window)
+    assert conflicts.old_row.isVisibleTo(conflicts)
+    from cold_steel.ui.conflicts_window import old_copies_details
+
+    details = old_copies_details(conflicts.old_copies, conflicts.names)
+    assert name in details
+    assert "Scripted triggers: alpha_b" in details
+
+    # A playset without them hides the line.
+    with qtbot.waitSignal(window.old_copies_shown, timeout=20_000):
+        window.playset_list.setCurrentRow(2)
+    assert not window.old_label.isVisibleTo(window)
 
 
 def open_conflicts(qtbot: QtBot, window: MainWindow, mod: str | None = None) -> ConflictsWindow:
