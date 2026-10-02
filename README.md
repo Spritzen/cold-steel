@@ -17,22 +17,38 @@ of the game, so there's no Wine or Proton involved.
 You need **Arch Linux** (or an Arch-based distro such as CachyOS, EndeavourOS
 or Manjaro), with Stellaris installed through Steam.
 
-Cold Steel is in the AUR as `cold-steel`. With an AUR helper:
+1. Download the package, `cold-steel-<version>-1-any.pkg.tar.zst`, from the
+   [latest release](https://github.com/Spritzen/cold-steel/releases/latest).
+2. Install it with pacman, from the folder you downloaded it to:
 
-```sh
-yay -S cold-steel
-```
+   ```sh
+   sudo pacman -U ./cold-steel-*.pkg.tar.zst
+   ```
 
-Or without one:
-
-```sh
-git clone https://aur.archlinux.org/cold-steel.git
-cd cold-steel
-makepkg -si
-```
+   pacman also installs what Cold Steel needs, such as PySide6, from Arch's
+   own repos.
 
 Then start **Cold Steel** from your app menu (it's under Games), or run
 `cold-steel` in a terminal.
+
+**To update,** download the new release's package and install it the same
+way. Your settings and playsets are kept.
+
+**To remove it,** run `sudo pacman -R cold-steel`. Your playsets and settings
+stay in the folders listed under [Your files are safe](#your-files-are-safe).
+Delete those too if you want everything gone.
+
+### Build the package yourself
+
+If you'd rather not install a downloaded package, build it from the release's
+source code:
+
+```sh
+sudo pacman -S --needed git base-devel
+git clone https://github.com/Spritzen/cold-steel.git
+cd cold-steel/packaging
+makepkg -si
+```
 
 ### Run from source
 
