@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from cold_steel.core.errors import GAME, ErrorReport, GameError
+from cold_steel.ui.full_text import show_full_text
 
 ERROR_ROLE = Qt.ItemDataRole.UserRole
 NOT_LOADED = (
@@ -46,6 +47,7 @@ class ErrorsDialog(QDialog):
         self.stale.hide()
 
         self.tree = QTreeWidget()
+        show_full_text(self.tree)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Error", "Times", "File"])
         self.tree.setAlternatingRowColors(True)

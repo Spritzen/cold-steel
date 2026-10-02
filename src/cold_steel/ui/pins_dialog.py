@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from cold_steel.core.library import Library
 from cold_steel.core.snapshots import Drift, Snapshot
 from cold_steel.store.playsets import Playset
+from cold_steel.ui.full_text import show_full_text
 
 KEY_ROLE = Qt.ItemDataRole.UserRole
 # Shown in the file list before each path.
@@ -64,12 +65,14 @@ class PinsDialog(QDialog):
 
         self.summary = QLabel(wordWrap=True)
         self.tree = QTreeWidget()
+        show_full_text(self.tree)
         self.tree.setHeaderLabels(["Mod", "Pinned copy", "On Steam now"])
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.itemSelectionChanged.connect(self._show_files)
         self.files = QListWidget()
+        show_full_text(self.files)
         self.files_label = QLabel(wordWrap=True)
 
         right = QWidget()

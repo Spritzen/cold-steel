@@ -279,6 +279,37 @@ def test_a_refused_play_is_explained(window: MainWindow, monkeypatch: pytest.Mon
     assert window.playset_list.item(1).font().bold()  # still the launcher's active one
 
 
+def test_open_in_launcher_exports_as_active_then_starts_it(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cold_steel.paradox import processes
+    from cold_steel.paradox.launcher_db import read_launcher
+
+    assert window.library is not None
+    game = window.library.game
+    started: list[object] = []
+    told: list[str] = []
+    monkeypatch.setattr(window, "start_launcher", started.append)
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.LAUNCHER)
+    window.playset_list.setCurrentRow(2)
+    window.open_launcher_action.trigger()
+    assert started == [] and "already open" in told[0]
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    window.open_launcher_action.trigger()
+    assert started == [game]
+    active = [p.name for p in read_launcher(game.launcher_db).playsets if p.active]
+    assert active == ["Second Playset"]
+
+
+def test_workshop_ids_for_the_steam_page(window: MainWindow) -> None:
+    assert window._workshop_id("workshop:2000000001") == "2000000001"
+    assert window._workshop_id("workshop:2000000001@abc") == "2000000001"
+    assert window._workshop_id("local:my_local") == ""
+
+
 def test_save_and_load_a_file(
     window: MainWindow, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -847,3 +878,43 @@ def test_ctrl_f_goes_to_the_search_box(window: MainWindow, qtbot: QtBot) -> None
     window.table.setFocus()
     QTest.keyClick(window, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
     assert window.search.hasFocus()
+
+
+def test_tags_is_three_quarters_of_name(window: MainWindow) -> None:
+    header = window.table.horizontalHeader()
+    for width in (900, 1400):
+        window.resize(width, window.height())
+        QTest.qWait(10)
+        name, tags = header.sectionSize(Column.NAME), header.sectionSize(Column.TAGS)
+        assert abs(tags - 0.75 * name) <= 1
+    window.playset_list.setCurrentRow(1)  # the # column appears: the two still share
+    name, tags = header.sectionSize(Column.NAME), header.sectionSize(Column.TAGS)
+    assert abs(tags - 0.75 * name) <= 1
+
+
+def test_cut_off_text_is_found(window: MainWindow) -> None:
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    from cold_steel.ui.full_text import fits
+
+    index = name_index(window, "Alpha Interface")
+    option = QStyleOptionViewItem()
+    window.table.initViewItemOption(option)
+    option.rect = window.table.visualRect(index)
+    assert fits(window.table, option, index)
+    option.rect.setWidth(20)
+    assert not fits(window.table, option, index)
+
+
+def test_hover_text_wraps_at_a_sensible_width(window: MainWindow) -> None:
+    from PySide6.QtGui import QFontMetrics
+
+    from cold_steel.ui.full_text import wrap
+
+    font = window.table.font()
+    width = 70 * QFontMetrics(font).averageCharWidth()
+    text = "word " * 60 + "\n/a/very/long/path/" + "x" * 200
+    lines = wrap(font, text, width).split("\n")
+    assert len(lines) > 4
+    assert all(QFontMetrics(font).horizontalAdvance(line) <= width for line in lines)
+    assert "".join(lines).replace(" ", "") == text.replace(" ", "").replace("\n", "")

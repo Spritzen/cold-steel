@@ -16,7 +16,7 @@ from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library, Scanner
 from cold_steel.core.play import PlayError, plan_play, play
 from cold_steel.core.playsets import PlaysetBook
-from cold_steel.core.sync import SyncError, export_playset
+from cold_steel.core.sync import SyncError, check_launcher_can_open, export_playset
 from cold_steel.paradox import processes
 from cold_steel.paradox.backup import backup_file, backups_of
 from cold_steel.paradox.descriptor import parse_descriptor
@@ -167,6 +167,35 @@ def test_export_refuses_while_the_launcher_runs(
     with pytest.raises(SyncError, match="launcher is open"):
         export_playset(book, book.playsets[0], library, backups)
     assert snapshot(db.parent, recursive=False) == before
+
+
+def test_export_can_make_the_playset_the_launchers_active_one(
+    library: Library, book: PlaysetBook, backups: Path
+) -> None:
+    before = {p.name: p.active for p in read_launcher(library.game.launcher_db).playsets}
+    export_playset(book, book.playsets[1], library, backups)
+    after = {p.name: p.active for p in read_launcher(library.game.launcher_db).playsets}
+    assert after == before  # a plain export leaves the active one alone
+
+    export_playset(book, book.playsets[1], library, backups, active=True)
+    launcher = read_launcher(library.game.launcher_db)
+    assert [p.name for p in launcher.playsets if p.active] == [book.playsets[1].name]
+
+
+def test_the_launcher_opens_only_when_nothing_is_in_the_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for running, reason in (
+        (processes.LAUNCHER, "already open"),
+        (processes.GAME, "Stellaris is running"),
+        (frozenset(), "Steam isn't running"),
+    ):
+        monkeypatch.setattr(processes, "running", lambda names, on=running: names == on)
+        with pytest.raises(SyncError, match=reason):
+            check_launcher_can_open()
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    check_launcher_can_open()
 
 
 def test_a_failed_backup_leaves_the_database_alone(library: Library, tmp_path: Path) -> None:

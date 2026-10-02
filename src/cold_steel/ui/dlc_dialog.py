@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from cold_steel.paradox.dlc import Dlc
+from cold_steel.ui.full_text import show_full_text
 
 
 class DlcDialog(QDialog):
@@ -25,6 +26,7 @@ class DlcDialog(QDialog):
         self.resize(420, 560)
 
         self.list = QListWidget()
+        show_full_text(self.list)
         off = set(disabled)
         for dlc in dlcs:
             item = QListWidgetItem(dlc.name)

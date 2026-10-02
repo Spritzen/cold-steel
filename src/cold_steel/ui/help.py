@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from cold_steel import __version__
 from cold_steel.store import paths
+from cold_steel.ui.full_text import show_full_text
 
 
 def welcome_text() -> str:
@@ -36,7 +37,8 @@ into its own list. After that the launcher only changes when you press
 <ul>
 <li><b>Play</b> writes <code>dlc_load.json</code>, which tells the game what to load. For a
 mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.</li>
-<li><b>Export to launcher</b> writes the playset into the launcher's database.</li>
+<li><b>Export to launcher</b> and <b>Open in launcher</b> write the playset into the
+launcher's database.</li>
 <li><b>Generate patch mod</b>, <b>Build</b> and <b>Pins</b> add their own mods to the
 game's <code>mod</code> folder. Their names start with <code>cold_steel_</code>.</li>
 </ul>
@@ -109,6 +111,7 @@ class ShortcutsDialog(QDialog):
         self.setWindowTitle("Keyboard shortcuts")
         rows = shortcut_rows(menus)
         self.table = QTableWidget(len(rows), 3)
+        show_full_text(self.table)
         self.table.setHorizontalHeaderLabels(["Menu", "Action", "Shortcut"])
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

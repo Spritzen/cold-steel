@@ -1,21 +1,32 @@
 """The main Cold Steel window: playsets on the left, the mod list on the right."""
 
+import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from msgspec.structs import replace as msgspec_replace
-from PySide6.QtCore import QEvent, QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QModelIndex,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QDesktopServices,
     QFont,
     QFontMetrics,
     QIcon,
     QImage,
     QKeySequence,
-    QTextLayout,
-    QTextOption,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -89,7 +100,14 @@ from cold_steel.core.snapshots import (
     SnapshotStore,
     snapshots_dir,
 )
-from cold_steel.core.sync import SyncError, export_playset, import_playset
+from cold_steel.core.sync import (
+    SyncError,
+    check_launcher_can_open,
+    export_playset,
+    import_playset,
+    start_launcher,
+)
+from cold_steel.paradox import processes
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
@@ -101,6 +119,7 @@ from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
+from cold_steel.ui.full_text import line_count, show_full_text
 from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
@@ -111,10 +130,16 @@ from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
 
 type Scan = Callable[[JobContext], Library]
 type Launch = Callable[[PlayPlan, Game, Path], Any]
+type StartLauncher = Callable[[Game], Any]
 
 ROW_HEIGHT = SHOWN_SIZE.height() + 4
 # Name and Tags wrap onto this many lines; ROW_HEIGHT has room for two.
 TEXT_LINES = 2
+WORKSHOP_PAGE = "https://steamcommunity.com/sharedfiles/filedetails/?id="
+# Opens the same page inside the Steam client.
+STEAM_WORKSHOP_PAGE = "steam://url/CommunityFilePage/"
+# Tags is this wide, compared with Name.
+TAGS_SHARE = 0.75
 # The widest the Health column gets.
 WIDEST_HEALTH = "99 warnings"
 
@@ -198,6 +223,8 @@ class MainWindow(QMainWindow):
         self.book: PlaysetBook | None = None
         # Writes dlc_load.json and starts the game. Tests swap in a stand-in.
         self.launch: Launch = play
+        # Starts the Paradox launcher. Tests swap in a stand-in.
+        self.start_launcher: StartLauncher = start_launcher
 
         self.model = ModTableModel()
         self.filter = ModFilter(self.model)
@@ -254,6 +281,7 @@ class MainWindow(QMainWindow):
         self.report_action = action("Build re&port…", self.show_build_report)
         self.delete_build_action = action("Delete b&uild…", self._delete_selected_build)
         self.export_action = action("&Export to launcher", self.export_to_launcher, "Ctrl+Shift+E")
+        self.open_launcher_action = action("&Open in launcher", self.open_in_launcher)
         self.save_file_action = action("&Save to file…", self.save_to_file, "Ctrl+S")
         self.load_file_action = action("&Load from file…", self.load_from_file, "Ctrl+O")
         self.import_menu = QMenu("&Import from launcher", self)
@@ -270,7 +298,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.delete_build_action)
         menu.addSeparator()
         menu.addMenu(self.import_menu)
-        menu.addAction(self.export_action)
+        menu.addActions([self.export_action, self.open_launcher_action])
         menu.addSeparator()
         menu.addActions([self.load_file_action, self.save_file_action])
 
@@ -347,6 +375,7 @@ class MainWindow(QMainWindow):
         playset_bar.addWidget(self._button("Build", self.build_action))
         playset_bar.addStretch()
         playset_bar.addWidget(self._button("Export to launcher", self.export_action))
+        playset_bar.addWidget(self._button("Open in launcher", self.open_launcher_action))
 
         self.problems_label = QLabel(wordWrap=True)
         self.problems_label.setStyleSheet("color: #d9534f;")
@@ -372,9 +401,14 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.clicked.connect(self._cell_clicked)
         self.table.verticalHeader().hide()
+        show_full_text(self.table, self.playset_list)
         self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(Column.NAME, QHeaderView.ResizeMode.Stretch)
+        # Name and Tags share the room the other columns leave (_share_name_and_tags).
+        header.setSectionResizeMode(Column.NAME, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(Column.TAGS, QHeaderView.ResizeMode.Fixed)
+        header.sectionResized.connect(self._other_column_resized)
+        self.table.viewport().installEventFilter(self)
         for col in (Column.POSITION, Column.VERSION, Column.SUPPORTED, Column.SOURCE):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         # Health starts as "…", so it gets room for its widest text up front.
@@ -385,7 +419,6 @@ class MainWindow(QMainWindow):
                 self.table.fontMetrics().horizontalAdvance(WIDEST_HEALTH) + 12,
             ),
         )
-        header.resizeSection(Column.TAGS, 240)  # until _fit_columns measures the tags
 
         right = QWidget()
         layout = QVBoxLayout(right)
@@ -514,11 +547,34 @@ class MainWindow(QMainWindow):
         self._check_pins(library)
         self.library_shown.emit(library)
 
-    def _fit_columns(self) -> None:
-        """Make Tags wide enough for every mod's tags on two lines. The first
-        time, also size the window and sidebar so nothing is cut off."""
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            self._share_name_and_tags()
+        return super().eventFilter(watched, event)
+
+    def _other_column_resized(self, col: int, _old: int, _new: int) -> None:
+        if col not in (Column.NAME, Column.TAGS):
+            self._share_name_and_tags()
+
+    def _share_name_and_tags(self) -> None:
+        """Split the room the other columns leave between Name and Tags,
+        with Tags TAGS_SHARE as wide as Name."""
         header = self.table.horizontalHeader()
-        header.resizeSection(Column.TAGS, self._wrapped_width(Column.TAGS))
+        others = sum(
+            header.sectionSize(c)
+            for c in Column
+            if c not in (Column.NAME, Column.TAGS) and not header.isSectionHidden(c)
+        )
+        room = max(0, self.table.viewport().width() - others)
+        name = round(room / (1 + TAGS_SHARE))
+        header.resizeSection(Column.NAME, name)
+        header.resizeSection(Column.TAGS, room - name)
+
+    def _fit_columns(self) -> None:
+        """The first time, size the window and sidebar so every mod's name fits
+        on two lines. Tags get their share of that; longer ones show on hover."""
+        self._share_name_and_tags()
+        header = self.table.horizontalHeader()
         if self._fitted:
             return
         self._fitted = True
@@ -536,10 +592,11 @@ class MainWindow(QMainWindow):
 
         # The sized-to-fit columns may be hidden or not laid out yet, so they're measured.
         fitted = (Column.POSITION, Column.VERSION, Column.SUPPORTED, Column.SOURCE)
+        name = self._wrapped_width(Column.NAME)
         columns = (
-            self._wrapped_width(Column.NAME)
+            name
+            + math.ceil(name * TAGS_SHARE)
             + header.sectionSize(Column.HEALTH)
-            + header.sectionSize(Column.TAGS)
             + sum(self._content_width(c) for c in fitted)
         )
         table = (
@@ -739,6 +796,7 @@ class MainWindow(QMainWindow):
             self.pins_action,
             self.build_action,
             self.export_action,
+            self.open_launcher_action,
             self.save_file_action,
         ):
             act.setEnabled(chosen)
@@ -918,6 +976,16 @@ class MainWindow(QMainWindow):
             menu.addAction("Remove from playset").triggered.connect(
                 lambda: self._edit(lambda p: ops.remove_mods(p, keys))
             )
+        if len(keys) == 1 and (steam_id := self._workshop_id(keys[0])):
+            menu.addSeparator()
+            menu.addAction("Open in browser").triggered.connect(
+                lambda: self.open_url(WORKSHOP_PAGE + steam_id)
+            )
+            # Only offered while Steam runs, so it never starts Steam by surprise.
+            if processes.running(processes.STEAM):
+                menu.addAction("Open in Steam").triggered.connect(
+                    lambda: self.open_url(STEAM_WORKSHOP_PAGE + steam_id)
+                )
         # Only mods Cold Steel built can be deleted from here.
         built = [b for k in keys if (b := built_from(k))]
         if len(keys) == 1 and built:
@@ -926,6 +994,15 @@ class MainWindow(QMainWindow):
                 lambda: self.delete_build(built[0])
             )
         menu.popup(self.table.viewport().mapToGlobal(pos))
+
+    def _workshop_id(self, key: str) -> str:
+        """The mod's Steam Workshop ID, or "" if it isn't on the Workshop."""
+        mods = self.library.every_mod if self.library else ()
+        mod = next((m for m in mods if m.key == key), None)
+        if mod is not None and mod.remote_file_id:
+            return mod.remote_file_id
+        source, _, ident = key.partition(":")
+        return ident.partition("@")[0] if source == "workshop" else ""
 
     # The launcher, files and Play
 
@@ -964,6 +1041,28 @@ class MainWindow(QMainWindow):
         if result.backup:
             text += f"\n\nThe launcher database was backed up first, to {result.backup}"
         self.tell("Export to launcher", text)
+
+    def open_in_launcher(self) -> None:
+        """Export the playset as the launcher's active one, then start the launcher."""
+        playset = self.selected_playset()
+        if playset is None or self.book is None or self.library is None:
+            return
+        game = self.library.game
+        try:
+            check_launcher_can_open()
+            result = export_playset(self.book, playset, self.library, self.backup_dir, active=True)
+            self.start_launcher(game)
+        except (SyncError, LauncherDbError) as error:
+            self.tell("Open in launcher", str(error))
+            return
+        self.statusBar().showMessage(f"Opening the Paradox launcher with {playset.name}")
+        if result.skipped:
+            self.tell(
+                "Open in launcher",
+                "The launcher doesn't know these mods yet, so they were left out. "
+                "Close the launcher once it has found them, then open it from here again:\n"
+                + "\n".join(result.skipped),
+            )
 
     def save_to_file(self) -> None:
         playset = self.selected_playset()
@@ -1451,6 +1550,9 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(self, title, text)
         return answer == QMessageBox.StandardButton.Yes
 
+    def open_url(self, url: str) -> None:
+        QDesktopServices.openUrl(QUrl(url))
+
     def tell(self, title: str, text: str) -> None:
         QMessageBox.information(self, title, text)
 
@@ -1527,22 +1629,8 @@ def _wrap_width(font: QFont, text: str, lines: int) -> int:
     low, high = full // lines, full  # high always fits
     while low < high:
         mid = (low + high) // 2
-        if _line_count(font, text, mid) <= lines:
+        if line_count(font, text, mid) <= lines:
             high = mid
         else:
             low = mid + 1
     return high
-
-
-def _line_count(font: QFont, text: str, width: int) -> int:
-    layout = QTextLayout(text, font)
-    option = QTextOption()
-    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
-    layout.setTextOption(option)
-    layout.beginLayout()
-    count = 0
-    while (line := layout.createLine()).isValid():
-        line.setLineWidth(width)
-        count += 1
-    layout.endLayout()
-    return count

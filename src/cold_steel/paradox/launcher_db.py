@@ -172,12 +172,14 @@ def write_playset(
     backup_dir: Path,
     launcher_id: str = "",
     dlc_enabled: Callable[[str], bool | None] = lambda dlc_id: None,
+    active: bool = False,
 ) -> WriteResult:
     """Write one playset into the launcher database, after backing it up.
 
     Replaces the playset `launcher_id` if the launcher still has it, otherwise
     adds a new one. `dlc_enabled` maps each of the launcher's DLC ids to on,
-    off, or None to leave it as it is.
+    off, or None to leave it as it is. `active` makes it the playset the
+    launcher shows when it opens.
     """
     if not db_path.is_file():
         raise LauncherDbError(f"The launcher database isn't there: {db_path}")
@@ -194,6 +196,8 @@ def write_playset(
                 keep_original(db_path)
                 backup = backup_file(db_path, backup_dir)
                 pid, skipped = _write(conn, columns, name, mods, launcher_id, dlc_enabled)
+                if active:
+                    conn.execute("UPDATE playsets SET isActive = (id = ?)", (pid,))
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from cold_steel.core.health import Health
 from cold_steel.core.mods import Mod
+from cold_steel.ui.full_text import show_full_text
 
 
 class HealthDialog(QDialog):
@@ -34,6 +35,7 @@ class HealthDialog(QDialog):
         )
 
         self.tree = QTreeWidget()
+        show_full_text(self.tree)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Problem", "Line", "The line reads"])
         self.tree.setWordWrap(True)

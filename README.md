@@ -141,6 +141,8 @@ authors' work, so don't upload it.
 
 - **Playset › Import from launcher** and **Export to launcher** copy playsets
   between Cold Steel and the Paradox launcher.
+- **Open in launcher** exports the playset, makes it the launcher's selected
+  playset, then opens the Paradox launcher.
 - **Save to file** and **Load from file** share a playset with a friend. The
   file uses the launcher's own format, and Irony Mod Manager's exports load
   too.
@@ -181,7 +183,8 @@ anything. It changes Paradox's files only when you ask:
 
 - **Play** writes `dlc_load.json`, which tells the game what to load. For a mod
   the launcher hasn't seen yet, it also adds the `.mod` file the game needs.
-- **Export to launcher** writes the playset into the launcher's database.
+- **Export to launcher** and **Open in launcher** write the playset into the
+  launcher's database.
 - **Generate patch mod**, **Build** and **Pins** add their own mods to the
   game's `mod` folder, as links. Their names start with `cold_steel_`.
   Deleting the playset removes them.

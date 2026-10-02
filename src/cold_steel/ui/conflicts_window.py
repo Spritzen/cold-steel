@@ -37,6 +37,7 @@ from cold_steel.core.mods import base_key
 from cold_steel.core.patch import check_own
 from cold_steel.core.resolve import CHOSEN, NONE, STALE, ResolutionBook, State, choices_digest
 from cold_steel.store.resolutions import Ignore
+from cold_steel.ui.full_text import show_full_text
 from cold_steel.ui.tasks import Task, TaskRunner
 
 ITEM_ROLE = Qt.ItemDataRole.UserRole
@@ -165,6 +166,7 @@ class ConflictsWindow(QDialog):
         filters.addWidget(self.ignored_box)
 
         self.tree = QTreeWidget()
+        show_full_text(self.tree)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Conflict", "Wins", "Mods"])
         self.tree.setAlternatingRowColors(True)
