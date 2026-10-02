@@ -4,7 +4,7 @@ PY      := python3
 VERSION := $(shell PYTHONPATH=src $(PY) -c 'import cold_steel; print(cold_steel.__version__)')
 export PYTHONPATH := src
 
-.PHONY: run check lint format test bench docs package
+.PHONY: run check lint format test bench docs package screenshots
 
 run:            ## Open the app
 	$(PY) -m cold_steel
@@ -28,6 +28,9 @@ bench:          ## Run only the timing benchmarks
 
 docs:           ## Check that every link in the docs resolves
 	$(PY) tools/check_links.py
+
+screenshots:    ## Take the README's screenshots from your install (best run on the host)
+	$(PY) tools/screenshots.py
 
 package:        ## Build the Arch package from the last commit, into build/package/
 	rm -rf build/package
