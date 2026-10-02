@@ -24,6 +24,23 @@ type Stamp = tuple[int, int]  # size, modified time in nanoseconds
 
 DESCRIPTOR = "descriptor.mod"
 FALLBACK_PICTURE = "thumbnail.png"
+# A pinned copy's mod/*.mod file: cold_steel_pin_<Workshop id>_<snapshot id>.mod
+PIN_PREFIX = "cold_steel_pin_"
+
+
+def pinned_key(key: str, snapshot: str) -> str:
+    """The Mod.key of a Workshop mod's pinned copy: "workshop:<id>@<snapshot id>"."""
+    return f"{key}@{snapshot}"
+
+
+def base_key(key: str) -> str:
+    """The mod a key belongs to: a pinned copy's Workshop mod, or the key itself.
+    Conflict choices are kept by this, so pinning doesn't undo them."""
+    return key.partition("@")[0]
+
+
+def is_pinned(key: str) -> bool:
+    return "@" in key
 
 
 class Mod(msgspec.Struct, frozen=True):

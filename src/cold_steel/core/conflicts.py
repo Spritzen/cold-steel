@@ -123,7 +123,7 @@ class ConflictFinder:
     leave_out: frozenset[str] = frozenset()
 
     def __call__(self, ctx: JobContext) -> Found:
-        installed = {m.key for m in self.library.mods if m.installed}
+        installed = {m.key for m in self.library.every_mod if m.installed}
         enabled = (
             e.key
             for e in self.playset.entries
@@ -182,10 +182,19 @@ class ConflictFinder:
         rule = self.rules.for_file(claims[0].path)
         if rule.winner == "merged":
             return None
-        ordered = tuple(sorted(claims, key=lambda c: _sort_key(c, position)))
-        winner, reason = _winner(ordered, rule, position)
+        ordered, winner, reason = rank(claims, rule, position)
         digests = {c.definition.digest for c in ordered if c.definition and c.layer != GAME}
         return Conflict(kind, key, ordered, winner, reason, len(digests) <= 1, rule)
+
+
+def rank(
+    claims: Iterable[Claim], rule: Rule, position: dict[str, int]
+) -> tuple[tuple[Claim, ...], int, str]:
+    """An object's claims in the order the game reads them, which one it uses,
+    and why. `position` is each layer's place in the load order."""
+    ordered = tuple(sorted(claims, key=lambda c: _sort_key(c, position)))
+    winner, reason = _winner(ordered, rule, position)
+    return ordered, winner, reason
 
 
 def _file_conflict(claims: tuple[Claim, ...], index: Index) -> Conflict | None:

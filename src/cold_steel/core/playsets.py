@@ -15,8 +15,9 @@ from pathlib import Path
 import msgspec
 
 from cold_steel.core.library import Library
-from cold_steel.core.mods import Mod
+from cold_steel.core.mods import Mod, pinned_key
 from cold_steel.store.playsets import (
+    Pin,
     Playset,
     PlaysetEntry,
     PlaysetFile,
@@ -185,13 +186,50 @@ def set_dlc_enabled(playset: Playset, folder: str, enabled: bool) -> Playset:
     return msgspec.structs.replace(playset, disabled_dlcs=tuple(sorted(disabled)))
 
 
+def set_pins(playset: Playset, pins: Iterable[Pin]) -> Playset:
+    """Pin these mods, each to its snapshot. Other pins stay as they are."""
+    new = {p.key: p for p in pins}
+    kept = tuple(p for p in playset.pins if p.key not in new)
+    return msgspec.structs.replace(playset, pins=kept + tuple(new.values()))
+
+
+def unpin(playset: Playset) -> Playset:
+    """Play every mod from Steam's folder again."""
+    return msgspec.structs.replace(playset, pins=())
+
+
+def as_played(playset: Playset) -> Playset:
+    """The playset as the game gets it: each pinned mod swapped for its copy.
+    Play, conflicts, the patch mod and builds all use this."""
+    if not playset.pins:
+        return playset
+    pins = {p.key: p.snapshot for p in playset.pins}
+    return msgspec.structs.replace(
+        playset,
+        entries=tuple(
+            msgspec.structs.replace(e, key=pinned_key(e.key, pins[e.key])) if e.key in pins else e
+            for e in playset.entries
+        ),
+    )
+
+
 def missing_mods(playsets: Iterable[Playset], library: Library) -> list[Mod]:
-    """A stand-in Mod for each playset entry that isn't installed any more."""
+    """A stand-in Mod for each playset entry that isn't installed any more.
+
+    A pinned mod that's gone from Steam still plays from its copy, so its
+    stand-in is the copy, under the mod's own key.
+    """
     installed = {m.key for m in library.mods}
+    copies = {m.key: m for m in library.pinned}
     missing: dict[str, Mod] = {}
     for playset in playsets:
+        pins = {p.key: p.snapshot for p in playset.pins}
         for entry in playset.entries:
             if entry.key in installed or entry.key in missing:
+                continue
+            copy = copies.get(pinned_key(entry.key, pins.get(entry.key, "")))
+            if copy is not None:
+                missing[entry.key] = msgspec.structs.replace(copy, key=entry.key)
                 continue
             source, _, ident = entry.key.partition(":")
             missing[entry.key] = Mod(

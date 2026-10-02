@@ -198,7 +198,7 @@ class Indexer:
         return Source(GAME, install, None, stamps)
 
     def _mod_sources(self) -> Iterator[Source]:
-        for mod in self.library.mods:
+        for mod in self.library.every_mod:
             if not mod.installed:
                 continue
             stamps = self.library.files.get(mod.key, {})

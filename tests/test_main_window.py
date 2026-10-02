@@ -693,3 +693,83 @@ def test_rows_use_the_themes_text_colour(qtbot: QtBot, clashing: MainWindow) -> 
     assert item is not None
     for col in range(3):
         assert item.data(col, Qt.ItemDataRole.ForegroundRole) is None
+
+
+# Phase 6: pinning and building
+
+
+def test_pin_a_playset_then_accept_an_update(
+    qtbot: QtBot, window: MainWindow, sample_install: SampleInstall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(window, "confirm", lambda title, text: True)
+    window.playset_list.setCurrentRow(1)  # Main Playset: Alpha, Gamma, My Local, Unsubscribed
+    window.show_pins()
+    dialog = window._pins_dialog
+    assert dialog is not None and dialog.pin_button.isEnabled()
+    assert not window.pin_label.isVisible()
+
+    with qtbot.waitSignals([window.pins_changed, window.pins_checked], timeout=20_000):
+        dialog.pin_button.click()
+    playset = window.selected_playset()
+    assert playset is not None
+    # The uninstalled mod can't be copied, and local mods aren't pinned.
+    assert {p.key for p in playset.pins} == {"workshop:2000000001", "workshop:2000000003"}
+    assert window.pin_label.text() == "Pinned: 2 Workshop mod(s) play from saved copies."
+    assert not dialog.pin_button.isEnabled()
+    # Pinned copies are never listed as mods of their own.
+    assert len(shown(window)) == 4
+
+    # Steam updates Alpha: the window says so, and shows which files changed.
+    (sample_install.workshop_dir / "2000000001/common/alpha.txt").write_text("changed = yes\n")
+    with qtbot.waitSignal(window.pins_checked, timeout=20_000):
+        window.rescan()
+    assert "1 have an update on Steam: Alpha Interface" in window.pin_label.text()
+    alpha = dialog.tree.findItems("Alpha Interface", Qt.MatchFlag.MatchExactly)[0]
+    assert alpha.text(2) == "Updated (now 1.2): 1 changed"
+    dialog.tree.setCurrentItem(alpha)
+    assert [dialog.files.item(n).text() for n in range(dialog.files.count())] == [
+        "~ common/alpha.txt"
+    ]
+
+    with qtbot.waitSignals([window.pins_changed, window.pins_checked], timeout=20_000):
+        dialog.accept_button.click()
+    assert "update" not in window.pin_label.text()
+
+    with qtbot.waitSignal(window.library_shown, timeout=20_000):
+        dialog.unpin_button.click()
+    playset = window.selected_playset()
+    assert playset is not None and playset.pins == ()
+    assert not window.pin_label.isVisible()
+    assert window.snapshots.ids() == []  # no playset uses the copies, so they're gone
+
+
+def test_build_a_playset_into_one_mod(qtbot: QtBot, clashing: MainWindow) -> None:
+    with (
+        qtbot.waitSignal(clashing.library_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.build_finished, timeout=20_000) as finished,
+    ):
+        clashing.build_action.trigger()
+    record = finished.args[0]
+    assert record.mismatches == []
+    assert record.names["local:my_local"] == "My Local Tweaks"
+
+    # The report shows where every file came from.
+    report = clashing._build_dialog
+    assert report is not None and report.isVisible()
+    assert "Every clash has the same winner" in report.summary.text()
+    assert report.tree.topLevelItemCount() == len(record.files)
+    report.search.setText("same.gui")
+    item = report.tree.topLevelItem(0)
+    assert item is not None
+    assert (item.text(0), item.text(1), item.text(2)) == (
+        "interface/same.gui",
+        "My Local Tweaks",
+        "Alpha Interface",
+    )
+
+    # A new playset plays just the built mod, which the scan found.
+    assert clashing.book is not None and clashing.library is not None
+    built = next(p for p in clashing.book.playsets if p.name == "Main Playset (built)")
+    assert [e.name for e in built.entries] == ["Cold Steel build: Main Playset"]
+    assert built.entries[0].key in {m.key for m in clashing.library.mods}
+    assert clashing.report_action.isEnabled()

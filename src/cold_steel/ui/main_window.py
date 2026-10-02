@@ -32,6 +32,17 @@ from PySide6.QtWidgets import (
 )
 
 from cold_steel.core import playsets as ops
+from cold_steel.core.build import (
+    Builder,
+    BuildError,
+    BuildRecord,
+    build_key,
+    build_name,
+    builds_dir,
+    load_record,
+    remove_build,
+    save_record,
+)
 from cold_steel.core.conflicts import ConflictFinder, Found
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
@@ -39,7 +50,7 @@ from cold_steel.core.index import Index, Indexer
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
-from cold_steel.core.mods import Mod
+from cold_steel.core.mods import Mod, base_key
 from cold_steel.core.patch import (
     PatchError,
     PatchPlan,
@@ -51,20 +62,31 @@ from cold_steel.core.patch import (
     write_patch,
 )
 from cold_steel.core.play import PlayError, PlayPlan, plan_play, play
-from cold_steel.core.playsets import PlaysetBook, missing_mods
-from cold_steel.core.resolve import ResolutionBook, copy_resolutions
+from cold_steel.core.playsets import PlaysetBook, as_played, missing_mods
+from cold_steel.core.resolve import ResolutionBook, choices_digest, copy_resolutions
 from cold_steel.core.share import ShareError, load_share_file, save_share_file
+from cold_steel.core.snapshots import (
+    Drift,
+    PinChecker,
+    Pinner,
+    Snapshot,
+    SnapshotError,
+    SnapshotStore,
+    snapshots_dir,
+)
 from cold_steel.core.sync import SyncError, export_playset, import_playset
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
-from cold_steel.store.playsets import Playset, playsets_file
+from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
+from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
+from cold_steel.ui.pins_dialog import PinsDialog
 from cold_steel.ui.tasks import Task, TaskRunner
 from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
 
@@ -87,6 +109,12 @@ class MainWindow(QMainWindow):
     conflicts_shown = Signal(object)
     # The patch mod was written: its PatchPlan. For tests.
     patch_generated = Signal(object)
+    # Mods were pinned or unpinned: the changed Playset. For tests.
+    pins_changed = Signal(object)
+    # Pinned mods were compared with Steam's folders: {snapshot id: (Snapshot, Drift)}.
+    pins_checked = Signal(object)
+    # A playset was built into one mod: its BuildRecord. For tests.
+    build_finished = Signal(object)
 
     def __init__(
         self,
@@ -100,6 +128,8 @@ class MainWindow(QMainWindow):
         index_cache: Path | None = None,
         choices_dir: Path | None = None,
         patch_dir: Path | None = None,
+        snapshot_dir: Path | None = None,
+        build_dir: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
@@ -122,6 +152,15 @@ class MainWindow(QMainWindow):
         self._patch_dir = patch_dir or patches_dir()
         self._choices: ResolutionBook | None = None  # the selected playset's
         self._patch_task: Task | None = None
+        self.snapshots = SnapshotStore(snapshot_dir or snapshots_dir())
+        self._pin_task: Task | None = None
+        self._check_task: Task | None = None
+        # What Steam changed in each pinned mod, by snapshot id.
+        self._checked: dict[str, tuple[Snapshot, Drift]] = {}
+        self._pins_dialog: PinsDialog | None = None
+        self._build_dir = build_dir or builds_dir()
+        self._build_task: Task | None = None
+        self._build_dialog: BuildDialog | None = None
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -185,6 +224,9 @@ class MainWindow(QMainWindow):
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
         self.conflicts_action = action("&Conflicts…", self.show_conflicts, "Ctrl+K")
+        self.pins_action = action("Pinned &versions…", self.show_pins)
+        self.build_action = action("&Build one mod", self.build_mod)
+        self.report_action = action("Build re&port…", self.show_build_report)
         self.export_action = action("&Export to launcher", self.export_to_launcher)
         self.save_file_action = action("&Save to file…", self.save_to_file)
         self.load_file_action = action("&Load from file…", self.load_from_file)
@@ -197,6 +239,8 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addActions([self.play_action, self.errors_action, self.conflicts_action])
         menu.addActions([self.sort_action, self.dlc_action])
+        menu.addSeparator()
+        menu.addActions([self.pins_action, self.build_action, self.report_action])
         menu.addSeparator()
         menu.addMenu(self.import_menu)
         menu.addAction(self.export_action)
@@ -258,6 +302,8 @@ class MainWindow(QMainWindow):
         playset_bar.addWidget(self._button("Conflicts", self.conflicts_action))
         playset_bar.addWidget(self._button("Sort", self.sort_action))
         playset_bar.addWidget(self._button("DLC…", self.dlc_action))
+        playset_bar.addWidget(self._button("Pins…", self.pins_action))
+        playset_bar.addWidget(self._button("Build", self.build_action))
         playset_bar.addStretch()
         playset_bar.addWidget(self._button("Export to launcher", self.export_action))
 
@@ -267,6 +313,8 @@ class MainWindow(QMainWindow):
         self.missing_label = QLabel(wordWrap=True)
         self.missing_label.setStyleSheet("color: #d9534f;")
         self.missing_label.hide()
+        self.pin_label = QLabel(wordWrap=True)
+        self.pin_label.hide()
 
         self.table = QTableView()
         self.table.setModel(self.filter)
@@ -303,6 +351,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(filters)
         layout.addWidget(self.problems_label)
         layout.addWidget(self.missing_label)
+        layout.addWidget(self.pin_label)
         layout.addWidget(self.table)
 
         splitter = QSplitter()
@@ -404,6 +453,7 @@ class MainWindow(QMainWindow):
         self.errors_action.setEnabled(True)
         self._load_thumbnails(library)
         self._check_health(library)
+        self._check_pins(library)
         self.library_shown.emit(library)
 
     def _load_thumbnails(self, library: Library) -> None:
@@ -542,10 +592,15 @@ class MainWindow(QMainWindow):
             self.dlc_action,
             self.play_action,
             self.conflicts_action,
+            self.pins_action,
+            self.build_action,
             self.export_action,
             self.save_file_action,
         ):
             act.setEnabled(chosen)
+        self.report_action.setEnabled(
+            playset is not None and (self._build_dir / f"{playset.id}.json").exists()
+        )
         self.new_action.setEnabled(self.book is not None)
         self.load_file_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
@@ -556,9 +611,9 @@ class MainWindow(QMainWindow):
         """Show this playset's order and missing mods. None shows all mods."""
         self.model.set_playset(playset)
         self.filter.set_playset(playset)
-        installed = {m.key for m in self.library.mods} if self.library else set()
+        installed = {m.key for m in self.library.every_mod} if self.library else set()
         missing = (
-            [e.name or e.key for e in playset.entries if e.key not in installed]
+            [e.name or e.key for e in as_played(playset).entries if e.key not in installed]
             if (playset)
             else []
         )
@@ -568,6 +623,7 @@ class MainWindow(QMainWindow):
                 "deleted), so Play will leave them out: " + ", ".join(missing)
             )
         self.missing_label.setVisible(bool(missing))
+        self._show_pin_state(playset)
 
     # Changing playsets
 
@@ -632,13 +688,18 @@ class MainWindow(QMainWindow):
         if self.confirm(
             "Delete playset",
             f"Delete \u201c{playset.name}\u201d? Your mods stay installed. "
-            "The launcher's copy, if it has one, isn't touched.",
+            "The launcher's copy, if it has one, isn't touched. Its patch mod, its "
+            "build and its pinned copies are deleted, unless another playset uses them.",
         ):
             self.book.delete(playset.id)
             resolutions_file(playset.id, self._choices_dir).unlink(missing_ok=True)
-            if self.library is not None:
-                remove_patch(playset.id, self.library.game, self._patch_dir)
+            game = self.library.game if self.library else None
+            if game is not None:
+                remove_patch(playset.id, game, self._patch_dir)
+            remove_build(playset.id, self._build_dir, game)
             self._reload_playsets("")
+            if playset.pins:
+                self._collect_snapshots()
 
     def sort_mods(self) -> None:
         if self.library is None:
@@ -794,7 +855,7 @@ class MainWindow(QMainWindow):
         playset = self.selected_playset()
         if playset is None or self.book is None or self.library is None:
             return
-        plan = plan_play(playset, self.library)
+        plan = plan_play(as_played(playset), self.library)
         if plan.skipped and not self.confirm(
             "Some mods aren't installed",
             "These mods aren't installed, so the game won't load them:\n"
@@ -861,8 +922,12 @@ class MainWindow(QMainWindow):
 
     def show_conflicts(self, mod: str | None = None) -> None:
         """Open the Conflicts window for the selected playset. `mod` filters it to one mod."""
-        if self.selected_playset() is None or self.library is None:
+        playset = self.selected_playset()
+        if playset is None or self.library is None:
             return
+        if mod is not None:  # the table names a pinned mod by its own key
+            played = {base_key(e.key): e.key for e in as_played(playset).entries}
+            mod = played.get(mod, mod)
         window = self._conflicts_window
         if window is None:
             window = self._conflicts_window = ConflictsWindow(self.tasks, self)
@@ -892,9 +957,11 @@ class MainWindow(QMainWindow):
 
         leave_out = frozenset({patch_key(playset.id)})
 
+        played = as_played(playset)
+
         def job(ctx: JobContext) -> tuple[Index, Found]:
             index = Indexer(library, cache, previous)(ctx)
-            return index, ConflictFinder(index, playset, library, leave_out=leave_out)(ctx)
+            return index, ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
 
         task = self.tasks.start(job)
         self._conflicts_task = task
@@ -908,11 +975,19 @@ class MainWindow(QMainWindow):
         self._conflicts_task = None
         index, found = result
         self._index = index
-        names = {m.key: m.name for m in self.library.mods} if self.library else {}
+        names = self.mod_names()
         playset = self.selected_playset()
         choices = self.choices_for(playset) if playset else None
         self._conflicts_window.set_found(found, index, names, mod, choices)
         self.conflicts_shown.emit(found)
+
+    def mod_names(self) -> dict[str, str]:
+        """Every mod's name by Mod.key. A pinned copy is also named under its
+        mod's own key, which conflict choices use, even if the mod is gone."""
+        if self.library is None:
+            return {}
+        copies = {base_key(m.key): m.name for m in self.library.pinned}
+        return copies | {m.key: m.name for m in self.library.every_mod}
 
     def choices_for(self, playset: Playset) -> ResolutionBook:
         """The playset's conflict choices, opened once and kept while it's selected."""
@@ -935,9 +1010,11 @@ class MainWindow(QMainWindow):
         cache, previous, root = self._index_cache, self._index, self._patch_dir
         leave_out = frozenset({patch_key(playset.id)})
 
+        played = as_played(playset)
+
         def job(ctx: JobContext) -> PatchPlan:
             index = Indexer(library, cache, previous)(ctx)
-            found = ConflictFinder(index, playset, library, leave_out=leave_out)(ctx)
+            found = ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
             ctx.progress(0, 0, "Writing the patch mod")
             plan = plan_patch(found, resolutions, index)
             write_patch(plan, playset, library.game, root)
@@ -978,6 +1055,201 @@ class MainWindow(QMainWindow):
     def _patch_done(self) -> None:
         self._patch_task = None
         self.progress.hide()
+
+    # Pinned versions
+
+    def show_pins(self) -> None:
+        """Open the Pins window for the selected playset."""
+        playset, library = self.selected_playset(), self.library
+        if playset is None or library is None:
+            return
+        dialog = self._pins_dialog
+        if dialog is None:
+            dialog = self._pins_dialog = PinsDialog(self)
+            dialog.pin_requested.connect(self.pin_mods)
+            dialog.unpin_requested.connect(self.unpin_playset)
+        dialog.set_state(playset, library, self._checked)
+        self.show_dialog(dialog)
+
+    def pin_mods(self, keys: Sequence[str]) -> None:
+        """Copy these mods as they are on Steam now, and pin the selected playset to the copies."""
+        playset, library = self.selected_playset(), self.library
+        if playset is None or library is None or self._pin_task is not None or not keys:
+            return
+        previous = {p.key: p.snapshot for p in playset.pins}
+        task = self.tasks.start(Pinner(self.snapshots, library, tuple(keys), previous))
+        self._pin_task = task
+        task.progress.connect(self._show_progress)
+        task.succeeded.connect(lambda taken: self._pinned(playset.id, taken))
+        task.failed.connect(self._pin_failed)
+        task.finished.connect(self._pin_done)
+
+    def _pinned(self, playset_id: str, taken: dict[str, Snapshot]) -> None:
+        current = self.book.get(playset_id) if self.book else None
+        if current is None or self.book is None:
+            return
+        changed = ops.set_pins(current, [Pin(key, s.id) for key, s in taken.items()])
+        self.book.update(changed)
+        if self.selected_playset() == changed:
+            self._playset_changed(changed)
+        self.statusBar().showMessage(f"Pinned {len(taken)} mod(s) in {changed.name}")
+        self.pins_changed.emit(changed)
+        # An accepted update leaves the old copy unused. The scan then finds the new copies.
+        self._collect_snapshots(then=self.rescan)
+
+    def _pin_failed(self, error: Exception) -> None:
+        if isinstance(error, SnapshotError | OSError):
+            self.tell("Pin", f"The mods weren't pinned: {error}")
+        else:
+            self.tell("Pin", f"Pinning failed: {type(error).__name__}: {error}")
+
+    def _pin_done(self) -> None:
+        self._pin_task = None
+        self.progress.hide()
+
+    def unpin_playset(self) -> None:
+        playset = self.selected_playset()
+        if playset is None or not playset.pins:
+            return
+        if not self.confirm(
+            "Unpin",
+            f"Play every mod in \u201c{playset.name}\u201d from Steam's folder again? "
+            "The saved copies are deleted, unless another playset uses them.",
+        ):
+            return
+        self._edit(ops.unpin)
+        if self.book is not None:
+            self.pins_changed.emit(self.book.get(playset.id))
+        self._collect_snapshots(then=self.rescan)
+
+    def _collect_snapshots(self, then: Callable[[], object] | None = None) -> None:
+        """Delete the copies no playset uses any more, off the main thread."""
+        keep = {p.snapshot for ps in (self.book.playsets if self.book else ()) for p in ps.pins}
+        game, store = (self.library.game if self.library else None), self.snapshots
+        task = self.tasks.start(lambda ctx: store.collect(keep, game))
+        task.failed.connect(
+            lambda error: self.statusBar().showMessage(f"Deleting unused copies failed: {error}")
+        )
+        if then is not None:
+            task.finished.connect(then)
+
+    def _check_pins(self, library: Library) -> None:
+        """Compare every pinned mod with Steam's folder, to find updates."""
+        if self._check_task is not None:
+            self._check_task.cancel()
+        playsets = self.book.playsets if self.book else ()
+        ids = tuple(dict.fromkeys(p.snapshot for ps in playsets for p in ps.pins))
+        if not ids:
+            self._checked = {}
+            self._show_pin_state(self.selected_playset())
+            return
+        task = self.tasks.start(PinChecker(self.snapshots, library, ids))
+        self._check_task = task
+        task.succeeded.connect(lambda checked: self._pins_found(checked, task))
+        task.failed.connect(
+            lambda error: self.statusBar().showMessage(f"Checking pinned mods failed: {error}")
+        )
+
+    def _pins_found(self, checked: dict[str, tuple[Snapshot, Drift]], task: Task) -> None:
+        if task is not self._check_task:
+            return  # a newer scan replaced this check
+        self._check_task = None
+        self._checked = checked
+        self._show_pin_state(self.selected_playset())
+        self.pins_checked.emit(checked)
+
+    def _show_pin_state(self, playset: Playset | None) -> None:
+        """The line above the mod list saying the playset is pinned, and what Steam updated."""
+        if playset is not None and self.library is not None:
+            dialog = self._pins_dialog
+            if dialog is not None and dialog.isVisible():
+                dialog.set_state(playset, self.library, self._checked)
+        if playset is None or not playset.pins:
+            self.pin_label.hide()
+            return
+        names = self.mod_names()
+        updated = [
+            names.get(p.key, p.key)
+            for p in playset.pins
+            if (found := self._checked.get(p.snapshot)) and found[1].updated
+        ]
+        text = f"Pinned: {len(playset.pins)} Workshop mod(s) play from saved copies."
+        if updated:
+            text += (
+                f" {len(updated)} have an update on Steam: {', '.join(updated)}. "
+                "Open Pins… to see what changed."
+            )
+        self.pin_label.setText(text)
+        self.pin_label.show()
+
+    # Building one mod
+
+    def build_mod(self) -> None:
+        """Merge the selected playset, with its patch mod, into one mod."""
+        playset, library = self.selected_playset(), self.library
+        if playset is None or library is None or self._build_task is not None:
+            return
+        choices = self.choices_for(playset)
+        if (
+            choices.resolutions
+            and choices.built != choices_digest(choices.resolutions)
+            and not self.confirm(
+                "Build one mod",
+                "Your conflict choices changed since the patch mod was generated, so the "
+                "build won't have the latest ones. Build anyway?",
+            )
+        ):
+            return
+        builder = Builder(
+            library, as_played(playset), self._index_cache, self._build_dir, self._index
+        )
+        task = self.tasks.start(builder)
+        self._build_task = task
+        task.progress.connect(self._show_progress)
+        task.succeeded.connect(lambda result: self._built(result, playset))
+        task.failed.connect(self._build_failed)
+        task.finished.connect(self._build_done)
+
+    def _built(self, result: tuple[BuildRecord, Index], playset: Playset) -> None:
+        record, self._index = result
+        book = self.book
+        if book is not None and book.get(record.built_playset) is None:
+            # A playset that plays just the built mod, with the same DLC.
+            made = book.create(
+                book.unused_name(f"{playset.name} (built)"),
+                [PlaysetEntry(build_key(playset.id), True, build_name(playset))],
+            )
+            book.update(msgspec_replace(made, disabled_dlcs=playset.disabled_dlcs))
+            record.built_playset = made.id
+            save_record(self._build_dir, record)
+        self.statusBar().showMessage(f"Built {playset.name} into one mod")
+        self.build_finished.emit(record)
+        self.rescan()  # finds the built mod
+        self.show_build_report(record)
+
+    def _build_failed(self, error: Exception) -> None:
+        if isinstance(error, BuildError | OSError):
+            self.tell("Build", f"The mod wasn't built: {error}")
+        else:
+            self.tell("Build", f"Building failed: {type(error).__name__}: {error}")
+
+    def _build_done(self) -> None:
+        self._build_task = None
+        self.progress.hide()
+
+    def show_build_report(self, record: BuildRecord | None = None) -> None:
+        """Where every file of the selected playset's build came from."""
+        playset = self.selected_playset()
+        if record is None and playset is not None:
+            record = load_record(self._build_dir, playset.id)
+        if record is None:
+            return
+        dialog = self._build_dialog
+        if dialog is None:
+            dialog = self._build_dialog = BuildDialog(self)
+        dialog.set_record(record)
+        self.report_action.setEnabled(True)
+        self.show_dialog(dialog)
 
     # Questions for the user. Tests replace these.
 
