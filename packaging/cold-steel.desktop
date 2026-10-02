@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cold Steel
+GenericName=Stellaris Mod Manager
+Comment=Manage Stellaris mods and playsets
+Exec=cold-steel
+Icon=cold-steel
+Terminal=false
+Categories=Game;Utility;
+Keywords=Stellaris;Paradox;mods;playset;
+StartupWMClass=cold-steel

@@ -1,9 +1,10 @@
 # Day-to-day commands. `make check` must pass before merging.
 
 PY      := python3
+VERSION := $(shell PYTHONPATH=src $(PY) -c 'import cold_steel; print(cold_steel.__version__)')
 export PYTHONPATH := src
 
-.PHONY: run check lint format test bench docs
+.PHONY: run check lint format test bench docs package
 
 run:            ## Open the app
 	$(PY) -m cold_steel
@@ -27,3 +28,11 @@ bench:          ## Run only the timing benchmarks
 
 docs:           ## Check that every link in the docs resolves
 	$(PY) tools/check_links.py
+
+package:        ## Build the Arch package from the last commit, into build/package/
+	rm -rf build/package
+	mkdir -p build/package
+	git archive --prefix=cold-steel-$(VERSION)/ -o build/package/cold-steel-$(VERSION).tar.gz HEAD
+	cp packaging/PKGBUILD build/package/
+	cd build/package && makepkg --force --cleanbuild
+	namcap build/package/PKGBUILD build/package/cold-steel-$(VERSION)-*.pkg.tar.zst

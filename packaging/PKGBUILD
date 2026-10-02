@@ -1,0 +1,36 @@
+# Maintainer: Daniel Lee <daniel.lee1976@gmail.com>
+#
+# Every dependency is an official Arch package. There is no pip step.
+
+pkgname=cold-steel
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A native Linux mod manager for Stellaris"
+arch=('any')
+url="https://github.com/Spritzen/cold-steel"
+license=('MIT')
+depends=('python' 'pyside6' 'qt6-wayland' 'python-msgspec' 'python-xxhash')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+checkdepends=('python-pytest' 'python-pytest-qt' 'python-pytest-benchmark')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  # The real_install tests read the Stellaris on this machine, so they're left out.
+  QT_QPA_PLATFORM=offscreen python -m pytest --benchmark-skip -m "not real_install" -p no:cacheprovider
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/cold-steel.desktop "$pkgdir/usr/share/applications/cold-steel.desktop"
+  install -Dm644 src/cold_steel/data/cold-steel.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/cold-steel.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
