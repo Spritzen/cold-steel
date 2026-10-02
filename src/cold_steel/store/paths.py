@@ -13,6 +13,14 @@ def _xdg(var: str, default: str) -> Path:
     return base / APP_NAME
 
 
+def shown(path: Path) -> str:
+    """A path as the user reads it: the home folder as `~`."""
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
 def config_dir() -> Path:
     """Settings. `~/.config/cold-steel/`."""
     return _xdg("XDG_CONFIG_HOME", ".config")

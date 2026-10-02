@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from msgspec.structs import replace as msgspec_replace
-from PySide6.QtCore import QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -93,14 +93,17 @@ from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.store import paths
 from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
+from cold_steel.store.settings import Settings
 from cold_steel.ui import icons
 from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.health_dialog import HealthDialog
+from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
 from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
 from cold_steel.ui.pins_dialog import PinsDialog
+from cold_steel.ui.settings_dialog import SettingsDialog
 from cold_steel.ui.tasks import Task, TaskRunner
 from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
 
@@ -115,8 +118,8 @@ WIDEST_HEALTH = "99 warnings"
 
 
 class MainWindow(QMainWindow):
-    # The user picked a Steam folder by hand. The app saves it and rescans.
-    steam_dir_chosen = Signal(Path)
+    # The user changed the settings: the new Settings. The app saves and applies them.
+    settings_chosen = Signal(object)
     # A scan finished and its result is on screen. For tests and timing.
     library_shown = Signal(object)
     # Every mod's health is checked and shown. For tests.
@@ -148,10 +151,12 @@ class MainWindow(QMainWindow):
         patch_dir: Path | None = None,
         snapshot_dir: Path | None = None,
         build_dir: Path | None = None,
+        settings: Settings | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
         self.resize(1200, 760)
+        self.settings = settings or Settings()
 
         self.tasks = TaskRunner(self)
         self.library: Library | None = None
@@ -214,42 +219,40 @@ class MainWindow(QMainWindow):
     # Building the window
 
     def _build_menu(self) -> None:
-        menu = self.menuBar().addMenu("&File")
-        rescan = QAction(
-            "&Rescan mods", self, shortcut=QKeySequence(QKeySequence.StandardKey.Refresh)
-        )
-        rescan.triggered.connect(self.rescan)
-        steam = QAction("Set &Steam folder…", self)
-        steam.triggered.connect(self.choose_steam_dir)
-        quit_ = QAction("&Quit", self, shortcut=QKeySequence(QKeySequence.StandardKey.Quit))
-        quit_.triggered.connect(self.close)
-        menu.addActions([rescan, steam])
-        menu.addSeparator()
-        menu.addAction(quit_)
-
-        def action(text: str, slot: Callable[[], object], shortcut: str = "") -> QAction:
+        def action(
+            text: str, slot: Callable[[], object], shortcut: str | QKeySequence = ""
+        ) -> QAction:
             act = QAction(text, self)
             if shortcut:
                 act.setShortcut(QKeySequence(shortcut))
             act.triggered.connect(slot)
             return act
 
+        rescan = action("&Rescan mods", self.rescan, QKeySequence(QKeySequence.StandardKey.Refresh))
+        search = action("Search &mods", self.focus_search, "Ctrl+F")
+        settings = action("Se&ttings…", self.edit_settings, "Ctrl+,")
+        quit_ = action("&Quit", self.close, QKeySequence(QKeySequence.StandardKey.Quit))
+        menu = self.menuBar().addMenu("&File")
+        menu.addActions([rescan, search, settings])
+        menu.addSeparator()
+        menu.addAction(quit_)
+
         self.new_action = action("&New playset…", self.new_playset, "Ctrl+N")
-        self.copy_action = action("&Copy playset…", self.copy_playset)
+        self.copy_action = action("&Copy playset…", self.copy_playset, "Ctrl+D")
         self.rename_action = action("&Rename playset…", self.rename_playset, "F2")
-        self.delete_action = action("&Delete playset", self.delete_playset)
-        self.sort_action = action("&Sort load order", self.sort_mods)
+        self.delete_action = action("&Delete playset", self.delete_playset, "Ctrl+Del")
+        self.sort_action = action("&Sort load order", self.sort_mods, "Ctrl+L")
         self.dlc_action = action("&DLC…", self.choose_dlc)
         self.play_action = action("&Play", self.play, "Ctrl+Return")
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
         self.conflicts_action = action("&Conflicts…", self.show_conflicts, "Ctrl+K")
         self.pins_action = action("Pinned &versions…", self.show_pins)
-        self.build_action = action("&Build one mod", self.build_mod)
+        self.build_action = action("&Build one mod", self.build_mod, "Ctrl+B")
         self.report_action = action("Build re&port…", self.show_build_report)
-        self.export_action = action("&Export to launcher", self.export_to_launcher)
-        self.save_file_action = action("&Save to file…", self.save_to_file)
-        self.load_file_action = action("&Load from file…", self.load_from_file)
+        self.export_action = action("&Export to launcher", self.export_to_launcher, "Ctrl+Shift+E")
+        self.save_file_action = action("&Save to file…", self.save_to_file, "Ctrl+S")
+        self.load_file_action = action("&Load from file…", self.load_from_file, "Ctrl+O")
         self.import_menu = QMenu("&Import from launcher", self)
         self.import_menu.aboutToShow.connect(self._fill_import_menu)
 
@@ -267,6 +270,12 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addActions([self.load_file_action, self.save_file_action])
 
+        menu = self.menuBar().addMenu("&Help")
+        menu.addAction(action("&Keyboard shortcuts", self.show_shortcuts, "F1"))
+        menu.addAction(action("&What Cold Steel changes…", self.show_welcome))
+        menu.addSeparator()
+        menu.addAction(action("&About Cold Steel", self.show_about))
+
     def _build_library_page(self) -> QWidget:
         self.playset_list = QListWidget()
         self.playset_list.currentRowChanged.connect(self._playset_selected)
@@ -275,12 +284,13 @@ class MainWindow(QMainWindow):
         # Equal space before, between and after the buttons.
         sidebar_buttons = QHBoxLayout()
         sidebar_buttons.setSpacing(0)
-        for act, name, draw in (
+        self._sidebar_icons = (
             (self.new_action, "document-new", icons.draw_new),
             (self.copy_action, "edit-copy", icons.draw_copy),
             (self.rename_action, "edit-rename", icons.draw_rename),
             (self.delete_action, "edit-delete", icons.draw_delete),
-        ):
+        )
+        for act, name, draw in self._sidebar_icons:
             sidebar_buttons.addStretch()
             sidebar_buttons.addWidget(self._icon_button(act, icons.theme_icon(name, draw)))
         sidebar_buttons.addStretch()
@@ -417,8 +427,8 @@ class MainWindow(QMainWindow):
 
     def _build_message_page(self) -> QWidget:
         self.message = QLabel(wordWrap=True, alignment=Qt.AlignmentFlag.AlignCenter)
-        choose = QPushButton("Choose Steam folder…")
-        choose.clicked.connect(self.choose_steam_dir)
+        choose = QPushButton("Settings…")
+        choose.clicked.connect(self.edit_settings)
         retry = QPushButton("Try again")
         retry.clicked.connect(self.rescan)
 
@@ -464,12 +474,11 @@ class MainWindow(QMainWindow):
         self._scan = scan
         self.rescan()
 
-    def choose_steam_dir(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Choose your Steam folder (the one holding steamapps)", str(Path.home())
-        )
-        if folder:
-            self.steam_dir_chosen.emit(Path(folder))
+    def edit_settings(self) -> None:
+        changed = self.ask_settings()
+        if changed is not None and changed != self.settings:
+            self.settings = changed
+            self.settings_chosen.emit(changed)
 
     def show_library(self, library: Library) -> None:
         self.library = library
@@ -635,7 +644,7 @@ class MainWindow(QMainWindow):
 
     def _scan_failed(self, error: Exception) -> None:
         if isinstance(error, GameNotFound):
-            text = f"{error}\n\nIf Steam is somewhere else, choose its folder."
+            text = f"{error}\n\nIf Steam is somewhere else, choose its folder in Settings."
         else:
             text = f"Reading your mods failed:\n{type(error).__name__}: {error}"
         self.message.setText(text)
@@ -1402,6 +1411,14 @@ class MainWindow(QMainWindow):
         dialog = DlcDialog(self.library.dlcs, playset.disabled_dlcs, self)
         return dialog.disabled() if dialog.exec() else None
 
+    def ask_settings(self) -> Settings | None:
+        """The settings the user chose, or None if cancelled."""
+        found = None
+        if self.library is not None and not self.settings.game_data_dir:
+            found = self.library.game.data_dir
+        dialog = SettingsDialog(self.settings, found, self)
+        return dialog.settings() if dialog.exec() else None
+
     def show_health(self, mod: Mod, issues: Health) -> None:
         HealthDialog(mod, issues, self).exec()
 
@@ -1425,6 +1442,28 @@ class MainWindow(QMainWindow):
             "Playset files (*.json *.zip);;All files (*)",
         )
         return Path(path) if path else None
+
+    # Help
+
+    def focus_search(self) -> None:
+        self.search.setFocus()
+        self.search.selectAll()
+
+    def show_shortcuts(self) -> None:
+        ShortcutsDialog(self.menuBar(), self).exec()
+
+    def show_welcome(self) -> None:
+        WelcomeDialog(self).exec()
+
+    def show_about(self) -> None:
+        QMessageBox.about(self, "About Cold Steel", ABOUT)
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 (Qt override)
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            # Drawn icons take the text colour, so they're drawn again for the new theme.
+            for act, name, draw in self._sidebar_icons:
+                act.setIcon(icons.theme_icon(name, draw))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         self.tasks.cancel_all()
