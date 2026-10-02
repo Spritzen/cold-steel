@@ -23,7 +23,7 @@ build() {
 check() {
   cd "$pkgname-$pkgver"
   # The real_install tests read the Stellaris on this machine, so they're left out.
-  QT_QPA_PLATFORM=offscreen python -m pytest --benchmark-skip -m "not real_install" -p no:cacheprovider
+  PYTHONPATH="$PWD/src" QT_QPA_PLATFORM=offscreen python -m pytest --benchmark-skip -m "not real_install" -p no:cacheprovider
 }
 
 package() {
