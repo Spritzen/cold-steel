@@ -20,11 +20,14 @@ import msgspec
 
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.mods import (
+    PIN_PREFIX,
     CachedDescriptor,
     CachedMod,
     Mod,
     ModSource,
     Stamp,
+    is_pinned,
+    pinned_key,
     read_mod,
     read_outer,
 )
@@ -56,6 +59,9 @@ class CacheData(msgspec.Struct):
 class Library:
     game: Game
     mods: tuple[Mod, ...]  # installed mods, by name
+    # Pinned copies of Workshop mods (snapshots.py). They're played in place of
+    # the mod, never listed as mods of their own.
+    pinned: tuple[Mod, ...] = ()
     dlcs: tuple[Dlc, ...] = ()
     # The launcher's playsets, for importing. Ours are in core.playsets.
     launcher_playsets: tuple[Playset, ...] = ()
@@ -67,6 +73,11 @@ class Library:
         default_factory=dict, compare=False, repr=False
     )
     _outdated: dict[str, bool] = field(default_factory=dict, compare=False, repr=False)
+
+    @property
+    def every_mod(self) -> tuple[Mod, ...]:
+        """Everything the game can load: the mods, then the pinned copies."""
+        return self.mods + self.pinned
 
     def is_outdated(self, mod: Mod) -> bool:
         if mod.key not in self._outdated:
@@ -110,7 +121,8 @@ def scan_library(ctx: JobContext, game: Game, cache_file: Path) -> Library:
     if new_cache != cache:
         save_msgpack(cache_file, new_cache)
 
-    installed = {key: entry.mod for key, entry in mods.items()}
+    installed = {key: entry.mod for key, entry in mods.items() if not is_pinned(key)}
+    pinned = tuple(entry.mod for key, entry in mods.items() if is_pinned(key))
     dlcs = find_dlcs(game.install_dir)
     problems: list[str] = []
     try:
@@ -123,6 +135,7 @@ def scan_library(ctx: JobContext, game: Game, cache_file: Path) -> Library:
     return Library(
         game=game,
         mods=tuple(sorted(installed.values(), key=lambda m: (m.name.casefold(), m.key))),
+        pinned=pinned,
         dlcs=dlcs,
         launcher_playsets=tuple(_match_playsets(launcher.playsets, installed, dlcs)),
         launcher_active=next((p.id for p in launcher.playsets if p.active), ""),
@@ -150,7 +163,8 @@ def _mod_sources(game: Game, descriptors: dict[str, CachedDescriptor]) -> list[M
     """One source per Workshop folder, plus one per local mod/*.mod file.
 
     A mod/*.mod file belongs to a Workshop mod when it points into that mod's
-    Workshop folder. Anything else is a local mod.
+    Workshop folder. One we wrote for a pinned copy is that copy. Anything else
+    is a local mod.
     """
     workshop: dict[str, Path] = {}
     try:
@@ -165,6 +179,9 @@ def _mod_sources(game: Game, descriptors: dict[str, CachedDescriptor]) -> list[M
     for name, entry in descriptors.items():
         outer = Path(name)
         root, archive = _target(game, entry)
+        if pinned := _pinned(outer.stem):
+            sources.append(ModSource(pinned, "workshop", root, archive, outer, entry))
+            continue
         folder = root or (archive.parent if archive else None)
         if folder and folder.parent == game.workshop_dir and folder.name in workshop:
             outers.setdefault(folder.name, (outer, entry))
@@ -182,6 +199,14 @@ def _mod_sources(game: Game, descriptors: dict[str, CachedDescriptor]) -> list[M
         else:  # Steam downloaded it, but the launcher hasn't run since
             sources.append(ModSource(f"workshop:{wid}", "workshop", folder, None, None, None))
     return sources
+
+
+def _pinned(stem: str) -> str | None:
+    """The Mod.key of a pinned copy, from its .mod file's name, or None."""
+    if not stem.startswith(PIN_PREFIX):
+        return None
+    wid, _, snapshot = stem.removeprefix(PIN_PREFIX).rpartition("_")
+    return pinned_key(f"workshop:{wid}", snapshot) if wid.isdigit() and snapshot else None
 
 
 def _target(game: Game, entry: CachedDescriptor) -> tuple[Path | None, Path | None]:

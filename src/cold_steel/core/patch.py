@@ -29,6 +29,7 @@ import xxhash
 
 from cold_steel.core.conflicts import FILE, Claim, Conflict, Found
 from cold_steel.core.definitions import read_definitions
+from cold_steel.core.deploy import deploy, in_the_way, withdraw
 from cold_steel.core.health import BOM, SCRIPT_SUFFIXES, Issue, check_localisation, check_script
 from cold_steel.core.index import Index
 from cold_steel.core.resolve import choices_digest, chosen_claim, is_current
@@ -299,13 +300,12 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
     something that isn't ours is in the way.
     """
     folder = root / playset.id
-    link = game.mod_dir / f"{PATCH_PREFIX}{playset.id}"
-    outer = link.with_name(link.name + ".mod")
-    if link.exists() and not link.is_symlink():
-        raise PatchError(f"{link} is in the way. Move it, then generate the patch again.")
+    name = f"{PATCH_PREFIX}{playset.id}"
+    if why := in_the_way(game, name):
+        raise PatchError(why)
 
     descriptor = Descriptor(
-        name=patch_name(playset), version="1", supported_version=_supported(game.version)
+        name=patch_name(playset), version="1", supported_version=supported_version(game.version)
     )
     new = root / f".{playset.id}.new"
     old = root / f".{playset.id}.old"
@@ -321,23 +321,13 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
         folder.rename(old)
     new.rename(folder)
     shutil.rmtree(old, ignore_errors=True)
-
-    game.mod_dir.mkdir(parents=True, exist_ok=True)
-    if not (link.is_symlink() and link.readlink() == folder):
-        link.unlink(missing_ok=True)
-        link.symlink_to(folder, target_is_directory=True)
-    text = format_descriptor(msgspec.structs.replace(descriptor, path=str(link)))
-    if not outer.exists() or outer.read_text("utf-8") != text:
-        outer.write_text(text, "utf-8")
+    deploy(folder, name, descriptor, game)
     return folder
 
 
 def remove_patch(playset_id: str, game: Game, root: Path) -> None:
     """Delete a playset's patch mod, with its link and .mod file."""
-    link = game.mod_dir / f"{PATCH_PREFIX}{playset_id}"
-    if link.is_symlink():
-        link.unlink()
-    link.with_name(link.name + ".mod").unlink(missing_ok=True)
+    withdraw(game, f"{PATCH_PREFIX}{playset_id}")
     shutil.rmtree(root / playset_id, ignore_errors=True)
 
 
@@ -350,7 +340,8 @@ def with_patch_last(playset: Playset) -> Playset:
     )
 
 
-def _supported(version: str) -> str:
+def supported_version(version: str) -> str:
+    """The supported_version for a mod we make: the game's major.minor."""
     found = _VERSION.match(version)
     return f"v{found.group(1)}.{found.group(2)}.*" if found else ""
 

@@ -20,12 +20,20 @@ class PlaysetEntry(msgspec.Struct, frozen=True):
     name: str = ""  # kept so a mod that's gone from disk still shows its name
 
 
+class Pin(msgspec.Struct, frozen=True):
+    """A Workshop mod the playset plays from a saved copy, not Steam's folder."""
+
+    key: str  # the Workshop mod's Mod.key
+    snapshot: str  # the copy's id, in the snapshot store
+
+
 class Playset(msgspec.Struct, frozen=True):
     id: str
     name: str
     entries: tuple[PlaysetEntry, ...] = ()  # in load order
     disabled_dlcs: tuple[str, ...] = ()  # DLC folder names, e.g. "dlc033_cosmic_storms"
     launcher_id: str = ""  # the launcher playset this was imported from or exported to
+    pins: tuple[Pin, ...] = ()  # empty: every mod plays from Steam's folder
 
 
 class PlaysetFile(msgspec.Struct):

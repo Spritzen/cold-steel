@@ -82,9 +82,9 @@ class ErrorReader:
 
         loaded = self._loaded_mods()
         index = _FileIndex(loaded, self.library)
-        by_descriptor = _by_descriptor(self.library.mods)
+        by_descriptor = _by_descriptor(self.library.every_mod)
         by_folder = {
-            os.path.normpath(m.root or m.archive): m for m in self.library.mods if m.installed
+            os.path.normpath(m.root or m.archive): m for m in self.library.every_mod if m.installed
         }
 
         grouped: dict[str, dict[tuple[str, str], GameError]] = {}
@@ -107,7 +107,7 @@ class ErrorReader:
                     code=index.code(mod, file, entry.line),
                 )
 
-        names = {m.key: m.name for m in self.library.mods}
+        names = {m.key: m.name for m in self.library.every_mod}
         loaded_keys = {m.key for m in loaded}
         groups = [
             ErrorGroup(
@@ -131,8 +131,8 @@ class ErrorReader:
         load = read_dlc_load(self.library.game.data_dir)
         if load is None:
             return []
-        by_descriptor = _by_descriptor(self.library.mods)
-        by_key = {m.key: m for m in self.library.mods}
+        by_descriptor = _by_descriptor(self.library.every_mod)
+        by_key = {m.key: m for m in self.library.every_mod}
         mods: list[Mod] = []
         for entry in load.enabled_mods:
             name = Path(entry).name

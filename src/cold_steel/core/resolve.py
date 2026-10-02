@@ -6,7 +6,9 @@ version, and which conflicts to ignore.
     book.state(conflict, index)  -> NONE, CHOSEN or STALE
 
 A choice is STALE when any version of the object changed after it was made: a
-mod or the game updated, or a mod was added or removed. Its choice was made
+mod or the game updated, or a mod was added or removed. A mod's pinned copy
+counts as the mod (mods.base_key), so pinning or unpinning changes nothing
+unless the files differ. Its choice was made
 against text that's no longer there, so it needs another look before the patch
 mod uses it again.
 
@@ -23,6 +25,7 @@ import xxhash
 
 from cold_steel.core.conflicts import Claim, Conflict
 from cold_steel.core.index import Index
+from cold_steel.core.mods import base_key
 from cold_steel.store.resolutions import (
     Ignore,
     Resolution,
@@ -81,7 +84,11 @@ class ResolutionBook:
     def choose(self, conflict: Conflict, claim: Claim, index: Index) -> Resolution:
         """Make this version win."""
         resolution = Resolution(
-            conflict.kind, conflict.key, claim.layer, claim.path, seen=seen(conflict, index)
+            conflict.kind,
+            conflict.key,
+            base_key(claim.layer),
+            claim.path,
+            seen=seen(conflict, index),
         )
         self._put(resolution)
         return resolution
@@ -137,7 +144,7 @@ class ResolutionBook:
             elif rule.kind:
                 if rule.kind == conflict.kind:
                     return rule
-            elif rule.mod and rule.mod in conflict.mods:
+            elif rule.mod and rule.mod in {base_key(m) for m in conflict.mods}:
                 return rule
         return None
 
@@ -158,7 +165,7 @@ class ResolutionBook:
 
 def seen(conflict: Conflict, index: Index) -> tuple[Seen, ...]:
     """Every version of the conflict's object or file, as it is now."""
-    return tuple(Seen(c.layer, c.path, _digest(c, index)) for c in conflict.claims)
+    return tuple(Seen(base_key(c.layer), c.path, _digest(c, index)) for c in conflict.claims)
 
 
 def is_current(resolution: Resolution, conflict: Conflict, index: Index) -> bool:
@@ -171,7 +178,11 @@ def chosen_claim(resolution: Resolution, conflict: Conflict) -> Claim | None:
     if resolution.own:
         return None
     return next(
-        (c for c in conflict.claims if c.layer == resolution.layer and c.path == resolution.path),
+        (
+            c
+            for c in conflict.claims
+            if base_key(c.layer) == resolution.layer and c.path == resolution.path
+        ),
         None,
     )
 

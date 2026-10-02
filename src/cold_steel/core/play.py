@@ -31,7 +31,7 @@ class PlayPlan:
 
 
 def plan_play(playset: Playset, library: Library) -> PlayPlan:
-    installed = {m.key: m for m in library.mods}
+    installed = {m.key: m for m in library.every_mod}
     game = library.game
     enabled: list[str] = []
     new: dict[Path, str] = {}

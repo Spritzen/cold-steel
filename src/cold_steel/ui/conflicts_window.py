@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 from cold_steel.core.compare import TEXT_SUFFIXES, Pair, Version, compare, version_text
 from cold_steel.core.conflicts import FILE, Claim, Conflict, Found
 from cold_steel.core.index import GAME, Index
+from cold_steel.core.mods import base_key
 from cold_steel.core.patch import check_own
 from cold_steel.core.resolve import CHOSEN, NONE, STALE, ResolutionBook, State, choices_digest
 from cold_steel.store.resolutions import Ignore
@@ -637,7 +638,9 @@ class ConflictsWindow(QDialog):
         ]
         order = self.found.order if self.found else ()
         mods = sorted(conflict.mods, key=lambda m: order.index(m) if m in order else len(order))
-        options += [(f"Every conflict with {self.names.get(m, m)}", Ignore(mod=m)) for m in mods]
+        options += [
+            (f"Every conflict with {self.names.get(m, m)}", Ignore(mod=base_key(m))) for m in mods
+        ]
         for text, rule in options:
             menu.addAction(text).triggered.connect(lambda _=False, r=rule: self.ignore(r))
 
