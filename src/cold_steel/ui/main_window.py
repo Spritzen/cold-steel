@@ -73,10 +73,11 @@ from cold_steel.core.conflicts import ConflictFinder, Found
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
 from cold_steel.core.index import Index, Indexer
-from cold_steel.core.jobs import JobContext
+from cold_steel.core.jobs import Job, JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
 from cold_steel.core.mods import Mod, base_key
+from cold_steel.core.old_copies import OldCopy, describe, find_old_copies
 from cold_steel.core.patch import (
     PatchError,
     PatchPlan,
@@ -131,6 +132,8 @@ from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
 type Scan = Callable[[JobContext], Library]
 type Launch = Callable[[PlayPlan, Game, Path], Any]
 type StartLauncher = Callable[[Game], Any]
+# What the conflict job finds in a playset: the index, the conflicts, the old copies.
+type PlaysetFindings = tuple[Index, Found, tuple[OldCopy, ...]]
 
 ROW_HEIGHT = SHOWN_SIZE.height() + 4
 # Name and Tags wrap onto this many lines; ROW_HEIGHT has room for two.
@@ -142,6 +145,8 @@ STEAM_WORKSHOP_PAGE = "steam://url/CommunityFilePage/"
 TAGS_SHARE = 0.75
 # The widest the Health column gets.
 WIDEST_HEALTH = "99 warnings"
+# Old copies named above the mod list; Conflicts lists the rest.
+OLD_COPIES_SHOWN = 3
 
 
 class MainWindow(QMainWindow):
@@ -155,6 +160,8 @@ class MainWindow(QMainWindow):
     errors_read = Signal(object)
     # A playset's conflicts are on screen in the Conflicts window. For tests.
     conflicts_shown = Signal(object)
+    # The selected playset was checked for old copies: the OldCopy tuple. For tests.
+    old_copies_shown = Signal(object)
     # The patch mod was written: its PatchPlan. For tests.
     patch_generated = Signal(object)
     # Mods were pinned or unpinned: the changed Playset. For tests.
@@ -198,6 +205,9 @@ class MainWindow(QMainWindow):
         self._index: Index | None = None
         self._conflicts_window: ConflictsWindow | None = None
         self._conflicts_task: Task | None = None
+        # Mods replacing a newer mod's files with old copies, in the selected playset.
+        self._old_task: Task | None = None
+        self.old_copies: tuple[OldCopy, ...] = ()
         self._choices_dir = choices_dir or resolutions_dir()
         self._patch_dir = patch_dir or patches_dir()
         self._choices: ResolutionBook | None = None  # the selected playset's
@@ -385,6 +395,9 @@ class MainWindow(QMainWindow):
         self.missing_label.hide()
         self.pin_label = QLabel(wordWrap=True)
         self.pin_label.hide()
+        self.old_label = QLabel(wordWrap=True)
+        self.old_label.setStyleSheet("color: #d9534f;")
+        self.old_label.hide()
 
         self.table = QTableView()
         self.table.setModel(self.filter)
@@ -428,6 +441,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.problems_label)
         layout.addWidget(self.missing_label)
         layout.addWidget(self.pin_label)
+        layout.addWidget(self.old_label)
         layout.addWidget(self.table)
 
         self.splitter = QSplitter()
@@ -545,6 +559,7 @@ class MainWindow(QMainWindow):
         self._load_thumbnails(library)
         self._check_health(library)
         self._check_pins(library)
+        self._check_old_copies()
         self.library_shown.emit(library)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
@@ -826,6 +841,7 @@ class MainWindow(QMainWindow):
             )
         self.missing_label.setVisible(bool(missing))
         self._show_pin_state(playset)
+        self._check_old_copies()
 
     # Changing playsets
 
@@ -1146,7 +1162,7 @@ class MainWindow(QMainWindow):
         )
 
     def _errors_ready(self, report: ErrorReport, *, show: bool) -> None:
-        self.errors_button.setText(f"Errors ({report.total})" if report.total else "Errors")
+        self.errors_button.setText(f"Errors ({report.problems})" if report.problems else "Errors")
         dialog = self._errors_dialog
         if show and dialog is None:
             dialog = self._errors_dialog = ErrorsDialog(self)
@@ -1156,12 +1172,16 @@ class MainWindow(QMainWindow):
             if show:
                 self.show_dialog(dialog)
         if not show:  # read because the game closed
-            self.statusBar().showMessage(
-                f"Stellaris closed with {report.total} errors in its log. "
-                "Press Errors to see which mods caused them."
-                if report.total
-                else "Stellaris closed. Its error log is empty."
-            )
+            if report.problems:
+                text = (
+                    f"Stellaris closed with {report.problems} errors in its log. "
+                    "Press Errors to see which mods caused them."
+                )
+            elif report.total:
+                text = "Stellaris closed. Its log only has overrides, which are normal."
+            else:
+                text = "Stellaris closed. Its error log is empty."
+            self.statusBar().showMessage(text)
         self.errors_read.emit(report)
 
     def _check_game(self) -> None:
@@ -1208,33 +1228,79 @@ class MainWindow(QMainWindow):
         if self._conflicts_task is not None:
             self._conflicts_task.cancel()
         window.setWindowTitle(f"Conflicts in {playset.name}")
-        cache, previous = self._index_cache, self._index
-
-        leave_out = frozenset({patch_key(playset.id)})
-
-        played = as_played(playset)
-
-        def job(ctx: JobContext) -> tuple[Index, Found]:
-            index = Indexer(library, cache, previous)(ctx)
-            return index, ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
-
-        task = self.tasks.start(job)
+        task = self.tasks.start(self._playset_job(playset, library))
         self._conflicts_task = task
         task.progress.connect(window.show_progress)
         task.succeeded.connect(lambda result: self._conflicts_found(result, task, mod))
         task.failed.connect(lambda error: window.show_failure(f"Finding conflicts failed: {error}"))
 
-    def _conflicts_found(self, result: tuple[Index, Found], task: Task, mod: str | None) -> None:
+    def _conflicts_found(self, result: PlaysetFindings, task: Task, mod: str | None) -> None:
         if task is not self._conflicts_task or self._conflicts_window is None:
             return  # a newer search replaced this one
         self._conflicts_task = None
-        index, found = result
+        index, found, old = result
         self._index = index
         names = self.mod_names()
         playset = self.selected_playset()
         choices = self.choices_for(playset) if playset else None
-        self._conflicts_window.set_found(found, index, names, mod, choices)
+        self._conflicts_window.set_found(found, index, names, mod, choices, old)
+        self._show_old_copies(old)
         self.conflicts_shown.emit(found)
+
+    def _playset_job(self, playset: Playset, library: Library) -> Job[PlaysetFindings]:
+        """A job finding the playset's conflicts and old copies, leaving out its patch mod
+        so the clashes it settles still show."""
+        cache, previous = self._index_cache, self._index
+        leave_out = frozenset({patch_key(playset.id)})
+        played = as_played(playset)
+        versions = {m.key: m.supported_version for m in library.every_mod}
+
+        def job(ctx: JobContext) -> PlaysetFindings:
+            index = Indexer(library, cache, previous)(ctx)
+            found = ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
+            return index, found, find_old_copies(found, versions)
+
+        return job
+
+    # Old copies
+
+    def _check_old_copies(self) -> None:
+        """Look for old copies in the selected playset, in the background."""
+        if self._old_task is not None:
+            self._old_task.cancel()
+            self._old_task = None
+        playset, library = self.selected_playset(), self.library
+        if playset is None or library is None:
+            self._show_old_copies(())
+            return
+        task = self.tasks.start(self._playset_job(playset, library))
+        self._old_task = task
+        task.succeeded.connect(lambda result: self._old_copies_found(result, task))
+        task.failed.connect(
+            lambda error: self.statusBar().showMessage(f"Checking for old copies failed: {error}")
+        )
+
+    def _old_copies_found(self, result: PlaysetFindings, task: Task) -> None:
+        if task is not self._old_task:
+            return  # the playset changed since
+        self._old_task = None
+        self._index = result[0]
+        self._show_old_copies(result[2])
+        self.old_copies_shown.emit(result[2])
+
+    def _show_old_copies(self, copies: tuple[OldCopy, ...]) -> None:
+        """The line above the mod list naming mods that replace newer files with old ones."""
+        self.old_copies = copies
+        if not copies:
+            self.old_label.hide()
+            return
+        names = self.mod_names()
+        lines = [describe(c, names) for c in copies[:OLD_COPIES_SHOWN]]
+        if len(copies) > OLD_COPIES_SHOWN:
+            lines.append(f"And {len(copies) - OLD_COPIES_SHOWN} more.")
+        lines.append("Conflicts lists every file and missing object.")
+        self.old_label.setText("\n".join(lines))
+        self.old_label.show()
 
     def mod_names(self) -> dict[str, str]:
         """Every mod's name by Mod.key. A pinned copy is also named under its

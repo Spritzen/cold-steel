@@ -7,12 +7,18 @@ are in `dlc_load.json`, in load order. The last of them that has that file is
 the one the game was reading. If none has it, the file is the game's own, and
 the error goes under "game / unknown" with the errors that name no file.
 
+Some entries only say a mod replaced something: "Object with key: x already
+exists, using the one at ...". That's what mods are for, and on a real
+24-mod playset it was 84% of the log. Those are marked `override`, so the
+window can fold them away (is_override).
+
 The game also reads every mod/*.mod file as it starts, loaded or not, and
 logs problems in them. Those errors name a mod that wasn't loaded, so its
 group is marked `loaded=False` and listed after the loaded mods.
 """
 
 import os
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -27,6 +33,22 @@ from cold_steel.paradox.error_log import FILE_NAME, LogEntry, read_error_log
 GAME = ""  # the group key for errors not traced to a mod
 GAME_NAME = "Game / unknown"
 
+# An entry saying one definition replaced another. Each is the start of the
+# entry's text, as the game writes it.
+_OVERRIDE = re.compile(
+    r"Object with key: \S+ already exists"
+    r"|an event with id \[[^\]]*\] already exists"
+    r"|An item with name \S+ already exists"
+    r"|Duplicate of \S+ added to entity system"
+    r"|duplicate section template found"
+    r"|Variable name \S+ is already taken"
+)
+
+
+def is_override(text: str) -> bool:
+    """Is this entry only the game saying one definition replaced another?"""
+    return _OVERRIDE.match(text) is not None
+
 
 @dataclass(frozen=True)
 class GameError:
@@ -37,6 +59,7 @@ class GameError:
     line: int = 0
     count: int = 1  # how many times this same error was logged
     code: str = ""  # the text of `line` in `file`, if it could be read
+    override: bool = False  # only says one definition replaced another (is_override)
 
 
 @dataclass(frozen=True)
@@ -50,6 +73,10 @@ class ErrorGroup:
     def total(self) -> int:
         return sum(e.count for e in self.errors)
 
+    @property
+    def overrides(self) -> int:
+        return sum(e.count for e in self.errors if e.override)
+
 
 @dataclass(frozen=True)
 class ErrorReport:
@@ -62,6 +89,15 @@ class ErrorReport:
     @property
     def total(self) -> int:
         return sum(g.total for g in self.groups)
+
+    @property
+    def overrides(self) -> int:
+        return sum(g.overrides for g in self.groups)
+
+    @property
+    def problems(self) -> int:
+        """Everything but the overrides."""
+        return self.total - self.overrides
 
 
 @dataclass
@@ -105,6 +141,7 @@ class ErrorReader:
                     file,
                     entry.line,
                     code=index.code(mod, file, entry.line),
+                    override=is_override(entry.text),
                 )
 
         names = {m.key: m.name for m in self.library.every_mod}

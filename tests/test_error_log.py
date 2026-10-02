@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cold_steel.core.errors import GAME, ErrorReader, ErrorReport, GameError
+from cold_steel.core.errors import GAME, ErrorReader, ErrorReport, GameError, is_override
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library, Scanner
 from cold_steel.paradox.error_log import parse_error_log
@@ -123,7 +123,30 @@ def test_errors_are_grouped_by_the_mod_that_caused_them(
     assert [(e.file, e.count) for e in unknown] == [("events/beta.txt", 1), ("", 2)]
     assert report.groups[-1].key == GAME
     assert report.total == 7
+    # The repeated "Duplicate of x" only says one definition replaced another.
+    assert [e.override for e in unknown] == [False, True]
+    assert (report.overrides, report.problems) == (2, 5)
     assert not report.stale
+
+
+def test_overrides_are_told_apart_from_problems() -> None:
+    # Real lines from a 24-mod playset's log.
+    overrides = [
+        "Object with key: artisan already exists, using the one at  file: common/pop_jobs/x.txt",
+        "an event with id [toxoids.1] already exists!  file: events/toxoids_events.txt line: 10",
+        'An item with name "ion_cannon" already exists!  file: gfx/projectiles/x.txt line: 44',
+        "Duplicate of toxoid_01_starbases_entity added to entity system",
+        "duplicate section template found. Multiple sections are named [ION_CANNON_CORE]. ",
+        "Variable name planet_standard_scale is already taken.  file: common/x.txt line: 178",
+    ]
+    problems = [
+        "Duplicate trigger at ' file: common/starbase_modules/x.txt line: 3'",
+        "Duplicate texture 'nospec.dds' found (current path 'a/nospec.dds', previous path 'b')",
+        'OnAction "on_colony_transfer" is referencing an invalid event: "mem_planetary_shields.14"',
+        "Failed to find texture 'infernal_ring_world_tech_diffuse.dds'",
+    ]
+    assert all(is_override(text) for text in overrides)
+    assert not any(is_override(text) for text in problems)
 
 
 def test_no_log_yet(library: Library) -> None:
