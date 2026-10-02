@@ -5,6 +5,7 @@ winner rules must pick the same winner for every clash in the built mod.
 """
 
 from dataclasses import replace
+from importlib.resources import files
 from pathlib import Path
 
 from cold_steel.core.build import (
@@ -12,8 +13,11 @@ from cold_steel.core.build import (
     Builder,
     BuildRecord,
     build_key,
+    built_from,
     check_build,
     load_record,
+    merged_tags,
+    not_ours,
     plan_build,
     remove_build,
 )
@@ -70,7 +74,8 @@ def test_the_build_plays_like_the_playset(sample_install: SampleInstall, tmp_pat
     assert len([f for f in record.files.values() if f.layer == PATCH]) >= 6
     # Every file says where it came from, and the build matches the record.
     on_disk = {p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file()} - {
-        "descriptor.mod"
+        "descriptor.mod",
+        "thumbnail.png",
     }
     assert on_disk == set(record.files)
     assert record.names[ALPHA] == "Alpha Interface"
@@ -78,7 +83,9 @@ def test_the_build_plays_like_the_playset(sample_install: SampleInstall, tmp_pat
     # Loose files at the top of a mod aren't copied.
     left_out = {path for _, path in record.left_out}
     assert {"descriptor.mod", "thumbnail.png"} <= left_out
-    assert not (folder / "thumbnail.png").exists()
+    # The thumbnail there is ours, not one of the mods'.
+    ours = files("cold_steel").joinpath("data/thumbnail.png").read_bytes()
+    assert (folder / "thumbnail.png").read_bytes() == ours
 
     # The record is saved, so the report can be shown later.
     saved = load_record(tmp_path / "builds", "p")
@@ -95,6 +102,7 @@ def test_the_build_is_linked_into_the_mod_folder(
     assert link.is_symlink() and link.resolve() == tmp_path / "builds/p"
     text = outer.read_text()
     assert 'name="Cold Steel build: Test"' in text
+    assert 'picture="thumbnail.png"' in text
     # The path the game reads is the full path on this machine, which the
     # dev container shares with the host.
     assert f'path="{link}"' in text and link.is_absolute()
@@ -103,10 +111,44 @@ def test_the_build_is_linked_into_the_mod_folder(
     library = scan(sample_install)
     built = next(m for m in library.mods if m.key == build_key("p"))
     assert built.name == "Cold Steel build: Test"
+    # Every tag of the mods it's built from, in load order.
+    assert built.tags == ("Graphics", "Interface", "Spaceships", "Balance")
+    assert built.picture == str(link / "thumbnail.png")
 
     remove_build("p", tmp_path / "builds", library.game)
     assert not link.is_symlink() and not outer.exists()
     assert not (tmp_path / "builds/p").exists()
+
+
+def test_only_our_builds_can_be_deleted(sample_install: SampleInstall, tmp_path: Path) -> None:
+    assert built_from(build_key("p")) == "p"
+    for key in (
+        "local:my_local",
+        "local:cold_steel_build_",
+        "local:cold_steel_build_..",
+        "workshop:cold_steel_build_p",
+        "local:cold_steel_patch_p",
+    ):
+        assert built_from(key) is None, key
+
+    library, playset = with_patch(sample_install, tmp_path)
+    root = tmp_path / "builds"
+    build(sample_install, tmp_path, library, playset)
+    assert not_ours("p", root, library.game) is None
+
+    # A link to somewhere else, or a real folder, under our name isn't ours.
+    link = library.game.mod_dir / f"{BUILD_PREFIX}p"
+    link.unlink()
+    link.symlink_to(tmp_path, target_is_directory=True)
+    assert "didn't put it" in (not_ours("p", root, library.game) or "")
+    link.unlink()
+    link.mkdir()
+    assert "isn't ours" in (not_ours("p", root, library.game) or "")
+
+
+def test_tags_are_merged_once_each() -> None:
+    lists = [("Graphics", "Balance"), ("balance", " Gameplay "), (), ("Graphics", "")]
+    assert merged_tags(lists) == ("Graphics", "Balance", "Gameplay")
 
 
 def test_a_rebuild_only_copies_what_changed(sample_install: SampleInstall, tmp_path: Path) -> None:
