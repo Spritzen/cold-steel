@@ -11,6 +11,8 @@ nothing new: Phase 5 already settled the clashes the user cared about.
   game's file-name rules pick the same winner inside the one mod.
 - Only files inside folders are copied. Loose files at the top of a mod
   (thumbnails, readmes, zips) aren't read by the game.
+- The built mod gets the Cold Steel icon as its thumbnail, and every tag of
+  the mods it's built from, each once.
 
 Afterwards the Phase 4 winner rules run on the built mod: every clash in the
 playset must have the same winner there (check_build).
@@ -24,11 +26,13 @@ changed. The build holds other authors' work, so it's for personal use only
 
 import contextlib
 import os
+import re
 import shutil
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
@@ -40,7 +44,7 @@ from cold_steel.core.index import GAME, Index, Indexer, LayerIndex, Source
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.merge_rules import Rules, load_rules
-from cold_steel.core.mods import DESCRIPTOR, Stamp, _walk, is_pinned
+from cold_steel.core.mods import DESCRIPTOR, FALLBACK_PICTURE, Stamp, _walk, is_pinned
 from cold_steel.core.patch import supported_version
 from cold_steel.paradox.descriptor import Descriptor, format_descriptor
 from cold_steel.paradox.game import Game
@@ -51,6 +55,7 @@ from cold_steel.store.playsets import Playset
 BUILD_PREFIX = "cold_steel_build_"
 BUILD_VERSION = 1
 BUILT = "build"  # the built mod's layer, in check_build
+_PLAIN_ID = re.compile(r"[A-Za-z0-9_-]+")  # uuid4s, as playsets.new_id() makes
 
 
 class BuildError(Exception):
@@ -106,6 +111,14 @@ def build_name(playset: Playset) -> str:
 def build_key(playset_id: str) -> str:
     """The built mod's Mod.key, once a scan has found it."""
     return f"local:{BUILD_PREFIX}{playset_id}"
+
+
+def built_from(key: str) -> str | None:
+    """The playset id a built mod was built from, or None if `key` isn't a build's.
+    Ids are plain names, never paths: a mod called `cold_steel_build_..` isn't ours."""
+    prefix = build_key("")
+    playset_id = key.removeprefix(prefix)
+    return playset_id if key.startswith(prefix) and _PLAIN_ID.fullmatch(playset_id) else None
 
 
 def load_record(root: Path, playset_id: str) -> BuildRecord | None:
@@ -197,7 +210,7 @@ def write_files(
                 written[out] = msgspec.structs.replace(want, out=(st.st_size, st.st_mtime_ns))
                 copied += 1
 
-    for path in existing.keys() - plan.files.keys() - {DESCRIPTOR}:
+    for path in existing.keys() - plan.files.keys() - {DESCRIPTOR, FALLBACK_PICTURE}:
         (folder / path).unlink(missing_ok=True)
     _remove_empty_folders(folder)
     return written, copied
@@ -227,6 +240,22 @@ class _Reader:
     ) -> None:
         if self._zip is not None:
             self._zip.close()
+
+
+def merged_tags(tag_lists: Iterable[Sequence[str]]) -> tuple[str, ...]:
+    """Every tag once, in the order first seen. "Balance" and "balance" are one tag."""
+    seen: dict[str, str] = {}
+    for tags in tag_lists:
+        for tag in tags:
+            seen.setdefault(tag.strip().lower(), tag.strip())
+    return tuple(t for t in seen.values() if t)
+
+
+def _write_thumbnail(target: Path) -> None:
+    """The Cold Steel icon, rendered from data/cold-steel.svg. Written only if it changed."""
+    data = resources.files("cold_steel").joinpath("data/thumbnail.png").read_bytes()
+    if not target.exists() or target.read_bytes() != data:
+        target.write_bytes(data)
 
 
 def _remove_empty_folders(root: Path) -> None:
@@ -324,22 +353,25 @@ class Builder:
         (self.root / f"{self.playset.id}.json").unlink(missing_ok=True)
         folder = self.root / self.playset.id
         files, copied = write_files(plan, previous, folder, index, ctx)
+        mods = {m.key: m for m in self.library.every_mod}
         descriptor = Descriptor(
             name=build_name(self.playset),
             version=datetime.now().strftime("%Y.%m.%d"),
             supported_version=supported_version(game.version),
+            tags=merged_tags(mods[k].tags for k in plan.order if k in mods),
+            picture=FALLBACK_PICTURE,
         )
         (folder / DESCRIPTOR).write_text(format_descriptor(descriptor), "utf-8")
+        _write_thumbnail(folder / FALLBACK_PICTURE)
 
         ctx.progress(0, 0, "Checking the build against the playset")
         mismatches = check_build(found, plan, index, rules)
-        names = {m.key: m.name for m in self.library.every_mod}
         record = BuildRecord(
             playset=self.playset.id,
             name=self.playset.name,
             built=datetime.now().strftime("%Y-%m-%d %H:%M"),
             order=plan.order,
-            names={k: names.get(k, k) for k in plan.order},
+            names={k: mods[k].name if k in mods else k for k in plan.order},
             files=files,
             left_out=list(plan.left_out),
             mismatches=mismatches,
@@ -349,6 +381,15 @@ class Builder:
         deploy(folder, name, descriptor, game)
         save_record(self.root, record)
         return record, index
+
+
+def not_ours(playset_id: str, root: Path, game: Game) -> str | None:
+    """Why the mod folder's `cold_steel_build_<id>` isn't a build of ours, or
+    None if it is (or if nothing is there). Check before remove_build()."""
+    link = game.mod_dir / f"{BUILD_PREFIX}{playset_id}"
+    if link.is_symlink() and link.readlink() != root / playset_id:
+        return f"{link} links somewhere Cold Steel didn't put it, so it isn't ours to delete."
+    return in_the_way(game, link.name)
 
 
 def remove_build(playset_id: str, root: Path, game: Game | None) -> None:

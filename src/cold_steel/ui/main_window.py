@@ -52,7 +52,9 @@ from cold_steel.core.build import (
     build_key,
     build_name,
     builds_dir,
+    built_from,
     load_record,
+    not_ours,
     remove_build,
     save_record,
 )
@@ -250,6 +252,7 @@ class MainWindow(QMainWindow):
         self.pins_action = action("Pinned &versions…", self.show_pins)
         self.build_action = action("&Build one mod", self.build_mod, "Ctrl+B")
         self.report_action = action("Build re&port…", self.show_build_report)
+        self.delete_build_action = action("Delete b&uild…", self._delete_selected_build)
         self.export_action = action("&Export to launcher", self.export_to_launcher, "Ctrl+Shift+E")
         self.save_file_action = action("&Save to file…", self.save_to_file, "Ctrl+S")
         self.load_file_action = action("&Load from file…", self.load_from_file, "Ctrl+O")
@@ -264,6 +267,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self.sort_action, self.dlc_action])
         menu.addSeparator()
         menu.addActions([self.pins_action, self.build_action, self.report_action])
+        menu.addAction(self.delete_build_action)
         menu.addSeparator()
         menu.addMenu(self.import_menu)
         menu.addAction(self.export_action)
@@ -738,9 +742,9 @@ class MainWindow(QMainWindow):
             self.save_file_action,
         ):
             act.setEnabled(chosen)
-        self.report_action.setEnabled(
-            playset is not None and (self._build_dir / f"{playset.id}.json").exists()
-        )
+        built = playset is not None and (self._build_dir / f"{playset.id}.json").exists()
+        self.report_action.setEnabled(built)
+        self.delete_build_action.setEnabled(built)
         self.new_action.setEnabled(self.book is not None)
         self.load_file_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
@@ -831,15 +835,20 @@ class MainWindow(QMainWindow):
             "The launcher's copy, if it has one, isn't touched. Its patch mod, its "
             "build and its pinned copies are deleted, unless another playset uses them.",
         ):
-            self.book.delete(playset.id)
-            resolutions_file(playset.id, self._choices_dir).unlink(missing_ok=True)
-            game = self.library.game if self.library else None
-            if game is not None:
-                remove_patch(playset.id, game, self._patch_dir)
-            remove_build(playset.id, self._build_dir, game)
+            self._forget_playset(playset)
             self._reload_playsets("")
             if playset.pins:
                 self._collect_snapshots()
+
+    def _forget_playset(self, playset: Playset) -> None:
+        """Delete a playset with its choices, patch mod and build."""
+        assert self.book is not None
+        self.book.delete(playset.id)
+        resolutions_file(playset.id, self._choices_dir).unlink(missing_ok=True)
+        game = self.library.game if self.library else None
+        if game is not None:
+            remove_patch(playset.id, game, self._patch_dir)
+        remove_build(playset.id, self._build_dir, game)
 
     def sort_mods(self) -> None:
         if self.library is None:
@@ -908,6 +917,13 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             menu.addAction("Remove from playset").triggered.connect(
                 lambda: self._edit(lambda p: ops.remove_mods(p, keys))
+            )
+        # Only mods Cold Steel built can be deleted from here.
+        built = [b for k in keys if (b := built_from(k))]
+        if len(keys) == 1 and built:
+            menu.addSeparator()
+            menu.addAction("Delete built mod…").triggered.connect(
+                lambda: self.delete_build(built[0])
             )
         menu.popup(self.table.viewport().mapToGlobal(pos))
 
@@ -1376,6 +1392,40 @@ class MainWindow(QMainWindow):
     def _build_done(self) -> None:
         self._build_task = None
         self.progress.hide()
+
+    def _delete_selected_build(self) -> None:
+        if playset := self.selected_playset():
+            self.delete_build(playset.id)
+
+    def delete_build(self, playset_id: str) -> None:
+        """Delete the mod Cold Steel built from a playset, and the playset that
+        plays just that mod. Nothing else can be deleted this way."""
+        library, book = self.library, self.book
+        if library is None or book is None or built_from(build_key(playset_id)) is None:
+            return
+        title = "Delete built mod"
+        if self._build_task is not None:
+            self.tell(title, "A build is running. Try again when it's done.")
+            return
+        if why := not_ours(playset_id, self._build_dir, library.game):
+            self.tell(title, f"The mod wasn't deleted: {why}")
+            return
+        record = load_record(self._build_dir, playset_id)
+        source = book.get(playset_id)
+        name = source.name if source else record.name if record else playset_id
+        plays_it = book.get(record.built_playset) if record and record.built_playset else None
+        text = f"Delete the mod built from \u201c{name}\u201d? That playset and its mods stay."
+        if plays_it is not None:
+            text += f" \u201c{plays_it.name}\u201d, which plays just the built mod, goes too."
+        if not self.confirm(title, text):
+            return
+        remove_build(playset_id, self._build_dir, library.game)
+        current = self.selected_playset()
+        if plays_it is not None:
+            self._forget_playset(plays_it)
+        self._reload_playsets(current.id if current and current != plays_it else "")
+        self.statusBar().showMessage(f"Deleted the mod built from {name}")
+        self.rescan()  # the built mod is gone from the mod folder
 
     def show_build_report(self, record: BuildRecord | None = None) -> None:
         """Where every file of the selected playset's build came from."""

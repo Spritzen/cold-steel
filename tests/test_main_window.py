@@ -777,6 +777,40 @@ def test_build_a_playset_into_one_mod(qtbot: QtBot, clashing: MainWindow) -> Non
     assert [e.name for e in built.entries] == ["Cold Steel build: Main Playset"]
     assert built.entries[0].key in {m.key for m in clashing.library.mods}
     assert clashing.report_action.isEnabled()
+    assert clashing.delete_build_action.isEnabled()
+
+
+def test_delete_a_built_mod(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with (
+        qtbot.waitSignal(clashing.library_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.build_finished, timeout=20_000) as finished,
+    ):
+        clashing.build_action.trigger()
+    playset_id = finished.args[0].playset
+    folder = clashing._build_dir / playset_id
+    assert folder.is_dir()
+
+    asked: list[str] = []
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return True
+
+    monkeypatch.setattr(clashing, "confirm", confirm)
+    with qtbot.waitSignal(clashing.library_shown, timeout=20_000):
+        clashing.delete_build_action.trigger()
+    assert "Main Playset (built)" in asked[0]
+
+    # The build, its link and the playset that played it are gone; the playset stays.
+    assert clashing.book is not None and clashing.library is not None
+    assert not folder.exists()
+    assert not (clashing._build_dir / f"{playset_id}.json").exists()
+    names = [p.name for p in clashing.book.playsets]
+    assert "Main Playset" in names and "Main Playset (built)" not in names
+    assert not any(m.key.startswith("local:cold_steel_build_") for m in clashing.library.mods)
+    assert not clashing.delete_build_action.isEnabled()
 
 
 # Phase 7: settings, shortcuts, help
