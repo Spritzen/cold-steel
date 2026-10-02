@@ -1,3 +1,3 @@
 """Cold Steel: a native Linux mod manager for Stellaris."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
