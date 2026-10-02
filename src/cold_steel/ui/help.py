@@ -1,15 +1,14 @@
 """The Help menu's windows: the first-run screen, the keyboard shortcuts, About."""
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QLabel,
     QMenu,
     QMenuBar,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -71,9 +70,12 @@ class WelcomeDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Welcome to Cold Steel")
-        self.resize(640, 0)
-        text = QLabel(welcome_text(), wordWrap=True)
-        text.setTextFormat(Qt.TextFormat.RichText)
+        self.resize(660, 520)
+        # Scrolls, so the whole text can be read on a small screen.
+        text = QTextBrowser()
+        text.setHtml(welcome_text())
+        text.setFrameShape(QTextBrowser.Shape.NoFrame)
+        text.viewport().setAutoFillBackground(False)  # the dialog's own background
         buttons = QDialogButtonBox()
         buttons.addButton("Get started", QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(self.accept)
