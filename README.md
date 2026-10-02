@@ -208,18 +208,29 @@ own. The PKGBUILD is in `packaging/`.
 
 ### A desktop icon when running from source
 
-The package adds Cold Steel to your app menu. To do the same when running
-from source, run these commands inside the `cold-steel` folder. They were
-tested on CachyOS with KDE Plasma, and use the standard desktop file format,
-so other desktops should work too.
+The package adds Cold Steel to your app menu. When running from source, you
+can add a desktop icon named `cold-steel-dev` instead. It stays out of the app
+menu, so it never clashes with an installed package.
+
+Run these commands inside the `cold-steel` folder. They were tested on
+CachyOS with KDE Plasma, and use the standard desktop file format, so other
+desktops should work too.
 
 ```sh
 install -Dm644 src/cold_steel/data/cold-steel.svg \
   ~/.local/share/icons/hicolor/scalable/apps/cold-steel.svg
 
-mkdir -p ~/.local/share/applications
-sed "s|^Exec=.*|Exec=env PYTHONPATH=$PWD/src python3 -m cold_steel|" \
-  packaging/cold-steel.desktop > ~/.local/share/applications/cold-steel.desktop
+cat > ~/Desktop/cold-steel-dev.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=cold-steel-dev
+Comment=Cold Steel, run from source
+Exec=env PYTHONPATH=$PWD/src python3 -m cold_steel
+Path=$PWD
+Icon=cold-steel
+Terminal=false
+EOF
+chmod +x ~/Desktop/cold-steel-dev.desktop
 ```
 
 If you move the `cold-steel` folder later, run the commands again from its
