@@ -1,15 +1,18 @@
-"""Old copies: a mod made for an older game version replacing a newer mod's files.
+"""Old copies: a mod made for an older game version replacing newer files.
 
     copies = find_old_copies(found, versions)
 
 A compatibility patch often ships its own copy of another mod's file. When the
 other mod is updated and the patch isn't, the patch's old copy still replaces
-the new one, and whatever the new file added is lost.
+the new one, and whatever the new file added is lost. The same happens to the
+game's own files: a mod made for 4.2 that ships 4.2 copies of the game's files
+takes away what 4.5 added to them.
 
 Two things must both be true before we say so:
 
 - The replacing mod is made for an older game version (major.minor) than the
-  mod it replaces. Versions we can't read, or with a `*` there, don't count.
+  mod it replaces, or than the game. Versions we can't read, or with a `*`
+  there, don't count.
 - Something the replaced file defines is missing from the game: no file the
   game reads defines it any more. An object that only moved to another file
   isn't missing.
@@ -46,14 +49,15 @@ class OldCopy:
 def find_old_copies(found: Found, versions: Mapping[str, str]) -> tuple[OldCopy, ...]:
     """Every old copy in the playset `found` was made for, the worst first.
 
-    `versions` is each Mod.key's supported_version.
+    `versions` is each Mod.key's supported_version, and the game's version
+    under GAME.
     """
     index = found.index
     tables = {layer: index.tables(layer) for layer in found.order}
-    mods = [layer for layer in found.order if layer != GAME]
+    layers = list(found.order)  # the game first, if it was indexed
 
     shared: Counter[str] = Counter()
-    for layer in mods:
+    for layer in layers:
         shared.update(tables[layer].paths.keys())
     if not any(count > 1 for count in shared.values()):
         return ()
@@ -69,7 +73,7 @@ def find_old_copies(found: Found, versions: Mapping[str, str]) -> tuple[OldCopy,
     for folded, count in shared.items():
         if count < 2:
             continue
-        owners = [layer for layer in mods if folded in tables[layer].paths]
+        owners = [layer for layer in layers if folded in tables[layer].paths]
         winner = owners[-1]
         new = versions.get(winner, "")
         won = index.layers[winner].files[tables[winner].paths[folded]]
@@ -110,6 +114,12 @@ def describe(copy: OldCopy, names: Mapping[str, str]) -> str:
     more = len(copy.missing) - NAMED
     if more > 0:
         shown += f" and {more} more"
+    if copy.replaces == GAME:
+        return (
+            f"{mod}, made for {copy.mod_version}, replaces {len(copy.files)} of the game's "
+            f"own files ({copy.replaces_version}) with older copies. "
+            f"{len(copy.missing)} thing(s) the game defines there are then missing: {shown}."
+        )
     return (
         f"{mod}, made for {copy.mod_version}, replaces {len(copy.files)} file(s) of "
         f"{replaces} ({copy.replaces_version}) with older copies. "

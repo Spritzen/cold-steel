@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QPlainTextEdit,
@@ -30,6 +31,13 @@ OVERRIDES_TIP = (
     "Lines like \u201cObject with key: x already exists\u201d. They say a mod replaced "
     "something the game or another mod defines, which is what mods do."
 )
+RESOURCES_TIP = (
+    "Lines like \u201cFailed to read key reference sr_latinum\u201d from the top bar's "
+    "resource lists. Mods like Universal Resource Patch list resources from many mods, so "
+    "any you have show up. Each one you don't have logs a line, which is how they work."
+)
+# How many lost objects the detail names before "and N more".
+LOST_SHOWN = 20
 
 
 class ErrorsDialog(QDialog):
@@ -53,6 +61,9 @@ class ErrorsDialog(QDialog):
         self.overrides_box = QCheckBox("Show overrides")
         self.overrides_box.setToolTip(OVERRIDES_TIP)
         self.overrides_box.toggled.connect(self._fill_tree)
+        self.resources_box = QCheckBox("Show missing resources")
+        self.resources_box.setToolTip(RESOURCES_TIP)
+        self.resources_box.toggled.connect(self._fill_tree)
 
         self.tree = QTreeWidget()
         show_full_text(self.tree)
@@ -84,7 +95,11 @@ class ErrorsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.summary)
         layout.addWidget(self.stale)
-        layout.addWidget(self.overrides_box)
+        boxes = QHBoxLayout()
+        boxes.addWidget(self.overrides_box)
+        boxes.addWidget(self.resources_box)
+        boxes.addStretch()
+        layout.addLayout(boxes)
         layout.addWidget(splitter)
         layout.addWidget(buttons)
 
@@ -92,6 +107,7 @@ class ErrorsDialog(QDialog):
         self.report = report
         self.stale.setVisible(report.stale)
         self.overrides_box.setVisible(bool(report.overrides))
+        self.resources_box.setVisible(bool(report.resources))
         self._fill_tree()
 
     def _fill_tree(self) -> None:
@@ -108,7 +124,8 @@ class ErrorsDialog(QDialog):
             return
         when = datetime.fromtimestamp(report.written).strftime("%H:%M on %d %B")
         overrides = self.overrides_box.isChecked()
-        groups = [g for g in report.groups if overrides or _shown_total(g, overrides)]
+        resources = self.resources_box.isChecked()
+        groups = [g for g in report.groups if _shown_total(g, overrides, resources)]
         mods = sum(g.key != GAME and g.loaded for g in groups)
         text = (
             f"{report.problems} errors from the game run at {when}. "
@@ -117,25 +134,34 @@ class ErrorsDialog(QDialog):
             if report.problems
             else f"No errors from the game run at {when}."
         )
+        if report.build:
+            text += f" Errors in {report.build} are listed under the mods its files came from."
         if report.overrides:
             text += (
                 f" The log also has {report.overrides} overrides: a mod replacing something "
                 "the game or another mod defines, which is normal."
                 + ("" if overrides else " Tick Show overrides to list them.")
             )
+        if report.resources:
+            text += (
+                f" {report.resources} entries are top-bar resources from mods you don't have, "
+                "which is normal."
+                + ("" if resources else " Tick Show missing resources to list them.")
+            )
         self.summary.setText(text)
         bold = QFont()
         bold.setBold(True)
         for group in groups:
             name = group.name if group.loaded else f"{group.name} (not loaded)"
-            top = QTreeWidgetItem(self.tree, [name, str(_shown_total(group, overrides)), ""])
+            shown = _shown_total(group, overrides, resources)
+            top = QTreeWidgetItem(self.tree, [name, str(shown), ""])
             top.setFont(0, bold)
             if not group.loaded:
                 top.setToolTip(0, NOT_LOADED)
                 for col in range(3):
                     top.setForeground(col, QColor(Qt.GlobalColor.gray))
             for error in group.errors:
-                if error.override and not overrides:
+                if (error.override and not overrides) or (error.resource and not resources):
                     continue
                 first = error.text.splitlines()[0] if error.text else ""
                 where = f"{error.file}:{error.line}" if error.line else error.file
@@ -155,10 +181,21 @@ class ErrorsDialog(QDialog):
             lines.append(f"File: {error.file}" + (f", line {error.line}" if error.line else ""))
         if error.code:
             lines.append(f"That line reads: {error.code}")
+        if error.lost:
+            shown = ", ".join(error.lost[:LOST_SHOWN])
+            if len(error.lost) > LOST_SHOWN:
+                shown += f" and {len(error.lost) - LOST_SHOWN} more"
+            lines += [
+                "",
+                "If the game stopped reading this file here, everything after this line was "
+                "lost, and errors about it show up in other files. This file defines "
+                f"{len(error.lost)} thing(s) after this line: {shown}.",
+            ]
         times = f", {error.count} times" if error.count > 1 else ""
         lines.append(f"Logged at {error.time}{times}, by {error.source} in the game.")
         self.detail.setPlainText("\n".join(lines))
 
 
-def _shown_total(group: ErrorGroup, overrides: bool) -> int:
-    return group.total if overrides else group.total - group.overrides
+def _shown_total(group: ErrorGroup, overrides: bool, resources: bool) -> int:
+    hidden = (0 if overrides else group.overrides) + (0 if resources else group.resources)
+    return group.total - hidden

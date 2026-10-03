@@ -73,7 +73,7 @@ from cold_steel.core.build import (
 from cold_steel.core.conflicts import ConflictFinder, Found
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
-from cold_steel.core.index import Index, Indexer
+from cold_steel.core.index import GAME, Index, Indexer
 from cold_steel.core.jobs import Job, JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
@@ -1316,7 +1316,7 @@ class MainWindow(QMainWindow):
                     "Press Errors to see which mods caused them."
                 )
             elif report.total:
-                text = "Stellaris closed. Its log only has overrides, which are normal."
+                text = "Stellaris closed. Its log only has overrides and other normal entries."
             else:
                 text = "Stellaris closed. Its error log is empty."
             self.statusBar().showMessage(text)
@@ -1391,7 +1391,9 @@ class MainWindow(QMainWindow):
         cache, previous = self._index_cache, self._index
         leave_out = frozenset({patch_key(playset.id)})
         played = as_played(playset)
-        versions = {m.key: m.supported_version for m in library.every_mod}
+        versions = {GAME: library.game.version} | {
+            m.key: m.supported_version for m in library.every_mod
+        }
 
         def job(ctx: JobContext) -> PlaysetFindings:
             index = Indexer(library, cache, previous)(ctx)
