@@ -106,8 +106,10 @@ from cold_steel.core.snapshots import (
 from cold_steel.core.sync import (
     SyncError,
     check_launcher_can_open,
+    describe_difference,
     export_playset,
     import_playset,
+    launcher_difference,
     start_launcher,
     sync_launcher,
 )
@@ -405,6 +407,8 @@ class MainWindow(QMainWindow):
         self.missing_label.hide()
         self.pin_label = QLabel(wordWrap=True)
         self.pin_label.hide()
+        self.launcher_label = QLabel(wordWrap=True)
+        self.launcher_label.hide()
         self.old_label = QLabel(wordWrap=True)
         self.old_label.setStyleSheet("color: #d9534f;")
         self.old_label.hide()
@@ -451,6 +455,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.problems_label)
         layout.addWidget(self.missing_label)
         layout.addWidget(self.pin_label)
+        layout.addWidget(self.launcher_label)
         layout.addWidget(self.old_label)
         layout.addWidget(self.table)
 
@@ -890,6 +895,7 @@ class MainWindow(QMainWindow):
             )
         self.missing_label.setVisible(bool(missing))
         self._show_pin_state(playset)
+        self._show_launcher_state(playset)
         self._check_old_copies()
 
     # Changing playsets
@@ -1138,6 +1144,15 @@ class MainWindow(QMainWindow):
         self._reload_playsets(playset.id)
         self.statusBar().showMessage(f"Imported {playset.name} from the launcher")
 
+    def _show_launcher_state(self, playset: Playset | None) -> None:
+        """The line above the mod list saying the launcher's copy is out of date."""
+        diff = launcher_difference(playset, self.library) if playset and self.library else None
+        if not diff:
+            self.launcher_label.hide()
+            return
+        self.launcher_label.setText(describe_difference(diff))
+        self.launcher_label.show()
+
     def export_to_launcher(self) -> None:
         playset = self.selected_playset()
         if playset is None or self.book is None or self.library is None:
@@ -1156,6 +1171,7 @@ class MainWindow(QMainWindow):
             )
         if result.backup:
             text += f"\n\nThe launcher database was backed up first, to {result.backup}"
+        self.rescan()  # reads the launcher's copy again
         self.tell("Export to launcher", text)
 
     def open_in_launcher(self) -> None:
@@ -1172,6 +1188,7 @@ class MainWindow(QMainWindow):
             self.tell("Open in launcher", str(error))
             return
         self.statusBar().showMessage(f"Opening the Paradox launcher with {playset.name}")
+        self.rescan()  # reads the launcher's copy again
         if result.skipped:
             self.tell(
                 "Open in launcher",
@@ -1216,6 +1233,7 @@ class MainWindow(QMainWindow):
             )
         if result.backup:
             text += f"\n\nThe launcher database was backed up first, to {result.backup}"
+        self.rescan()  # reads the launcher's copies again
         self.tell("Sync launcher", text)
 
     def save_to_file(self) -> None:

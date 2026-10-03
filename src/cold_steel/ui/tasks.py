@@ -53,6 +53,8 @@ class Task(QObject):
 
     def _deliver(self, outcome: str, value: object) -> None:
         """Runs on the main thread."""
+        if self._ctx.cancelled:  # cancelled after the job finished, before this ran
+            outcome = "cancelled"
         if outcome == "succeeded":
             self.succeeded.emit(value)
         elif outcome == "failed":

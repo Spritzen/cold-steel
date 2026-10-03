@@ -369,6 +369,23 @@ def test_sync_launcher_asks_first(window: MainWindow, monkeypatch: pytest.Monkey
     assert "1 other playset was removed" in told[0]
 
 
+def test_a_drifted_launcher_copy_is_shown_until_exported(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(window, "tell", lambda title, text: None)
+    window.playset_list.setCurrentRow(1)  # Main Playset, as imported
+    assert window.launcher_label.isHidden()
+
+    window._edit(lambda p: ops.remove_mods(p, ["workshop:2000000003"]))
+    assert "also has Gamma Soundtrack" in window.launcher_label.text()
+    assert not window.launcher_label.isHidden()
+
+    # Export rescans, which reads the launcher's copy again.
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.export_action.trigger()
+    assert window.launcher_label.isHidden()
+
+
 def test_workshop_ids_for_the_steam_page(window: MainWindow) -> None:
     assert window._workshop_id("workshop:2000000001") == "2000000001"
     assert window._workshop_id("workshop:2000000001@abc") == "2000000001"

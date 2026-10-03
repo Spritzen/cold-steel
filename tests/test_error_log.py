@@ -13,6 +13,7 @@ from cold_steel.core.errors import (
     GameError,
     is_missing_resource,
     is_override,
+    quoted_name,
 )
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library, Scanner
@@ -80,6 +81,12 @@ def test_each_kind_of_entry_names_its_file() -> None:
         # A script value has no file of its own; the one using it does.
         ("trigger_impl.cpp:900", "common/pop_jobs/16_shroud_jobs.txt", 568),
     ]
+    # A shader's extension is six letters.
+    [shader] = parse_error_log(
+        "[11:38:06][pdxshaderparser.cpp:1436]: Failed adding pixel shader "
+        "gfx/FX/buttonstate_pd_biosynth.shader(Up)\n"
+    )
+    assert shader.file == "gfx/FX/buttonstate_pd_biosynth.shader"
     # Lines that don't start with a time belong to the entry above them.
     assert entries[2].text.endswith('in file: "sound/ASB_soundeffects.asset" near line: 16')
     assert entries[5].text.endswith("id=419430400")
@@ -280,6 +287,73 @@ def test_errors_in_a_build_are_traced_to_its_mods(
     later = record.stat().st_mtime_ns + 5_000_000_000
     os.utime(record, ns=(later, later))
     assert ErrorReader(library, builds)(JobContext()).stale
+
+
+def test_the_names_errors_without_a_file_quote() -> None:
+    # Real lines from Cold Steel Mix's log.
+    assert [
+        quoted_name(text)
+        for text in (
+            "Missing sound effect: amb_aquatic_starbase_hum_01",
+            'Couldn\'t find sound effect: "amb_toxoid_starbase_hum_02"',
+            'Couldn\'t find particle 3D object "toxoid_01_ion_core_effect" (or toxoid_01_x)',
+            "synthetics_01_stronghold_entity.idle uses [animation = idle] but the entity does "
+            "not have an animated mesh!",
+            "humanoid_01_starbase_starport_entity has no attach point named part4",
+            "Failed to find texture 'planets\\nospec.dds'",
+            "Failed to get section template for key: SHIELD_ORBITAL_RING_SECTION",
+            "Missing modifier localization: hp_increased",
+            "Missing name localisation for deposit rs_d_dark_matter_deposit_1",
+            "Invalid government species_class reference [CRYO] in government restriction",
+            "Unknown promotion `owner` in text: owner.GetName]",
+        )
+    ] == [
+        "amb_aquatic_starbase_hum_01",
+        "amb_toxoid_starbase_hum_02",
+        "toxoid_01_ion_core_effect",
+        "synthetics_01_stronghold_entity",
+        "humanoid_01_starbase_starport_entity",
+        "nospec.dds",
+        "SHIELD_ORBITAL_RING_SECTION",
+        "hp_increased",
+        "rs_d_dark_matter_deposit_1",
+        "CRYO",
+        "",
+    ]
+
+
+def test_an_error_naming_no_file_goes_to_the_one_mod_that_mentions_its_name(
+    sample_install: SampleInstall,
+) -> None:
+    alpha = sample_install.workshop_dir / "2000000001/gfx/models"
+    alpha.mkdir(parents=True)
+    (alpha / "starbase.asset").write_text(
+        'entity = {\n\tname = "x_entity"\n\tsound = { soundeffect = "x_hum" }\n'
+        '\ttexture = "shared.dds"\n}\n',
+        "utf-8",
+    )
+    local = sample_install.data_dir / "mod/my_local/gfx/models"
+    local.mkdir(parents=True)
+    # Mentions shared.dds too, and x_hum only inside a longer name.
+    (local / "other.asset").write_text('texture = "shared.dds"\nsound = "x_hum_2"\n', "utf-8")
+    (sample_install.data_dir / "dlc_load.json").write_text(
+        '{"enabled_mods":["mod/ugc_2000000001.mod","mod/my_local.mod"],"disabled_dlcs":[]}',
+        "utf-8",
+    )
+    library = Scanner(*sample_install.scanner_args())(JobContext())
+    write_log(
+        library,
+        "[10:00:00][pdx_audio.cpp:1200]: Missing sound effect: x_hum\n"
+        "[10:00:01][pdxassetutil.cpp:146]: Failed to find texture 'shared.dds'\n"
+        "[10:00:02][pdx_audio.cpp:1200]: Missing sound effect: nowhere_hum\n",
+    )
+    found = groups(ErrorReader(library)(JobContext()))
+
+    [hum] = found["workshop:2000000001"]
+    assert (hum.file, hum.line, hum.quoted) == ("gfx/models/starbase.asset", 3, "x_hum")
+    assert hum.code == 'sound = { soundeffect = "x_hum" }'
+    # Two mods mention shared.dds, and none mentions nowhere_hum: both stay unknown.
+    assert [(e.file, e.quoted) for e in found[GAME]] == [("", ""), ("", "")]
 
 
 def test_no_log_yet(library: Library) -> None:
