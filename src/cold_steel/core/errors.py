@@ -28,11 +28,16 @@ those mods, not under the build.
 When the game can't read a file past some point, the objects defined after it
 never load, and errors about them show up in other files. A parse error names
 those objects (`lost`), so the window can say so.
+
+Many errors name no file, only a thing: "Missing sound effect: x". For a few
+known shapes we search the loaded mods' script and graphics files for that
+name. If exactly one mod mentions it, the error goes under that mod (`quoted`).
+On Cold Steel Mix this placed 75 of the 153 problems that named no file.
 """
 
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -64,6 +69,27 @@ _OVERRIDE = re.compile(
 # Where the game reads the top bar's resource lists, in interface/resource_groups/.
 _RESOURCE_SOURCE = "strategic_resources_gui_group.cpp"
 
+# Entries that name no file but quote something a mod's file mentions: a sound,
+# an entity, a texture, a section template. The name is the `name` group.
+_QUOTED = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"Missing sound effect: (?P<name>\S+)",
+        r'Couldn\'t find sound effect: "(?P<name>[^"]+)"',
+        r'Couldn\'t find particle 3D object "(?P<name>[^"]+)"',
+        r"(?P<name>[\w.]+?)\.\w+ uses \[animation = ",
+        r"(?P<name>\S+) has no attach point named",
+        r"Failed to find texture '(?:[^']*[\\/])?(?P<name>[^'\\/]+)'",
+        r"Failed to get section template for key: (?P<name>\S+)",
+        r"Missing modifier localization: (?P<name>\S+)",
+        r"Missing name localisation for deposit (?P<name>\S+)",
+        r"Invalid government species_class reference \[(?P<name>[^\]]+)\]",
+    )
+)
+# Where those names are searched for: the files that refer to such things.
+_SEARCHED_FOLDERS = ("common/", "events/", "gfx/", "interface/")
+_SEARCHED_SUFFIXES = (".txt", ".asset", ".gfx", ".gui")
+
 # An entry saying the game stopped understanding a file at some line.
 _PARSE_BREAK = re.compile(r'Error: "Unexpected token:|Corrupt Event Table Entry')
 
@@ -81,6 +107,15 @@ def is_missing_resource(source: str, text: str) -> bool:
     return source.startswith(_RESOURCE_SOURCE) and text.startswith("Failed to read key reference")
 
 
+def quoted_name(text: str) -> str:
+    """The thing an entry that names no file is about, for the shapes we know; else ""."""
+    for pattern in _QUOTED:
+        match = pattern.match(text)
+        if match:
+            return match["name"]
+    return ""
+
+
 @dataclass(frozen=True)
 class GameError:
     time: str  # of the first time it was logged
@@ -95,6 +130,8 @@ class GameError:
     # A parse error: the objects defined after `line` in `file`, lost if the game
     # stopped reading there.
     lost: tuple[str, ...] = ()
+    # It named no file. `file` is the only mod file that mentions this name.
+    quoted: str = ""
 
     @property
     def normal(self) -> bool:
@@ -174,17 +211,29 @@ class ErrorReader:
             os.path.normpath(m.root or m.archive): m for m in self.library.every_mod if m.installed
         }
 
+        def traced(mod: Mod | None, file: str) -> tuple[str, str]:
+            """The group key and file name: in a build, the mod the file came from."""
+            if mod is not None and mod.key in builds:
+                built = builds[mod.key].files.get(file.casefold())
+                if built is not None:
+                    return built.layer, built.source
+            return (mod.key if mod else GAME), file
+
+        quoted = self._quoted(ctx, entries, index, traced)
+
         grouped: dict[str, dict[tuple[str, str], GameError]] = {}
         for done, entry in enumerate(entries):
             if done % 500 == 0:
                 ctx.progress(done, len(entries), "Matching errors to mods")
             mod, file = self._owner(entry, index, by_descriptor, by_folder)
-            key, shown = mod.key if mod else GAME, file
-            if mod is not None and mod.key in builds:
-                # Group it under the mod the build's file came from.
-                built = builds[mod.key].files.get(file.casefold())
-                if built is not None:
-                    key, shown = built.layer, built.source
+            line, name = entry.line, ""
+            if mod is None and not entry.file:
+                name = quoted_name(entry.text)
+                if name in quoted:
+                    mod, file, line = quoted[name]
+                else:
+                    name = ""
+            key, shown = traced(mod, file)
             same = grouped.setdefault(key, {})
             seen = same.get((entry.source, entry.text))
             if seen:
@@ -196,11 +245,12 @@ class ErrorReader:
                 entry.source,
                 entry.text,
                 shown,
-                entry.line,
-                code=index.code(mod, file, entry.line),
+                line,
+                code=index.code(mod, file, line),
                 override=is_override(entry.text),
                 resource=is_missing_resource(entry.source, entry.text),
-                lost=index.defined_after(mod, file, entry.line) if parse_break else (),
+                lost=index.defined_after(mod, file, line) if parse_break else (),
+                quoted=name,
             )
 
         names = {m.key: m.name for m in self.library.every_mod}
@@ -227,6 +277,29 @@ class ErrorReader:
         stale = stale or any(b.saved > written for b in builds.values())
         build_names = ", ".join(names.get(k, k) for k in builds)
         return ErrorReport(log_file, written, tuple(groups), stale, build_names)
+
+    @staticmethod
+    def _quoted(
+        ctx: JobContext,
+        entries: list[LogEntry],
+        index: _FileIndex,
+        traced: Callable[[Mod | None, str], tuple[str, str]],
+    ) -> dict[str, tuple[Mod, str, int]]:
+        """For each name an entry without a file quotes: the one place it's
+        mentioned, if only one mod mentions it."""
+        names = {
+            name
+            for e in entries
+            if not e.file and not is_override(e.text) and (name := quoted_name(e.text))
+        }
+        if not names:
+            return {}
+        ctx.progress(0, 0, "Searching mods for the names errors quote")
+        found: dict[str, tuple[Mod, str, int]] = {}
+        for name, places in index.mentions(names).items():
+            if len({traced(mod, file)[0] for mod, file, _ in places}) == 1:
+                found[name] = places[0]
+        return found
 
     def _build_records(self, loaded: Iterable[Mod]) -> dict[str, _Build]:
         """The record of each loaded build, by the build's Mod.key."""
@@ -323,6 +396,37 @@ class _FileIndex:
     def owner(self, file: str) -> tuple[Mod | None, str]:
         found = self._owners.get(file.removeprefix("./").casefold())
         return found if found else (None, file)
+
+    def mentions(self, names: Iterable[str]) -> dict[str, list[tuple[Mod, str, int]]]:
+        """Where the files the game read mention each name, as a whole word:
+        (mod, file, line), the first mention in each file. Only script and
+        graphics text files are searched."""
+        words = sorted(names, key=len, reverse=True)
+        pattern = re.compile(
+            rb"(?<!\w)(?:" + b"|".join(re.escape(w.encode()) for w in words) + rb")(?!\w)"
+        )
+        by_mod: dict[str, list[str]] = {}
+        mods: dict[str, Mod] = {}
+        for mod, name in self._owners.values():
+            lowered = name.lower()
+            if lowered.startswith(_SEARCHED_FOLDERS) and lowered.endswith(_SEARCHED_SUFFIXES):
+                by_mod.setdefault(mod.key, []).append(name)
+                mods[mod.key] = mod
+        found: dict[str, list[tuple[Mod, str, int]]] = {}
+        for key, files in by_mod.items():
+            mod = mods[key]
+            with ModFiles(mod, self.library.files.get(key, {})) as opened:
+                for file in files:
+                    data = opened.read(file) or b""
+                    seen: set[bytes] = set()
+                    for match in pattern.finditer(data):
+                        word = match.group()
+                        if word in seen:
+                            continue
+                        seen.add(word)
+                        line = data.count(b"\n", 0, match.start()) + 1
+                        found.setdefault(word.decode(), []).append((mod, file, line))
+        return found
 
     def code(self, mod: Mod | None, file: str, line: int) -> str:
         """The text of one line of a file, from the mod or from the game."""

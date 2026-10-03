@@ -129,8 +129,8 @@ class ErrorsDialog(QDialog):
         mods = sum(g.key != GAME and g.loaded for g in groups)
         text = (
             f"{report.problems} errors from the game run at {when}. "
-            f"{mods} loaded mod(s) caused some of them. Errors that name no mod file are "
-            "under \u201cGame / unknown\u201d."
+            f"{mods} loaded mod(s) caused some of them. Errors that couldn't be matched "
+            "to a mod are under \u201cGame / unknown\u201d."
             if report.problems
             else f"No errors from the game run at {when}."
         )
@@ -177,6 +177,11 @@ class ErrorsDialog(QDialog):
             self.detail.clear()
             return
         lines = [error.text, ""]
+        if error.quoted:
+            lines.append(
+                f"This error names no file. Only one mod mentions “{error.quoted}”, "
+                "so it's listed under that mod, at the first place it does."
+            )
         if error.file:
             lines.append(f"File: {error.file}" + (f", line {error.line}" if error.line else ""))
         if error.code:

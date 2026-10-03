@@ -17,10 +17,13 @@ from cold_steel.core.library import Library, Scanner
 from cold_steel.core.play import PlayError, plan_play, play
 from cold_steel.core.playsets import PlaysetBook
 from cold_steel.core.sync import (
+    LauncherDifference,
     SyncError,
     check_launcher_can_open,
+    describe_difference,
     export_playset,
     import_playset,
+    launcher_difference,
     sync_launcher,
 )
 from cold_steel.paradox import processes
@@ -368,3 +371,43 @@ def test_running_reads_proc(tmp_path: Path) -> None:
         (tmp_path / pid / "comm").write_text(name + "\n")
     assert processes.running(processes.LAUNCHER, tmp_path)
     assert not processes.running(processes.GAME, tmp_path)
+
+
+def test_a_launcher_copy_that_drifted_is_noticed(
+    sample_install: SampleInstall, library: Library, book: PlaysetBook, backups: Path
+) -> None:
+    from cold_steel.core.playsets import move_mods, remove_mods, set_enabled
+
+    main = book.playsets[0]
+    assert not launcher_difference(main, library)  # just imported: the same
+    assert not launcher_difference(book.create("Fresh"), library)  # never exported
+
+    changed = move_mods(main, ["workshop:2000000001"], None)  # to the end
+    changed = remove_mods(changed, ["workshop:2000000003"])
+    changed = set_enabled(changed, ["workshop:2000000001"], False)
+    book.update(changed)
+    book.rename(main.id, "Renamed")
+    stored = book.get(main.id)
+    assert stored is not None
+
+    diff = launcher_difference(stored, library)
+    assert diff == LauncherDifference(
+        missing=(),
+        extra=("Gamma Soundtrack",),
+        switched=("Alpha Interface",),
+        order=True,
+        name="Main Playset",
+    )
+    assert describe_difference(diff) == (
+        "The launcher's copy of this playset is out of date: it also has Gamma Soundtrack; "
+        "it has a different on/off setting for Alpha Interface; it has the mods in a "
+        "different order; it is called \u201cMain Playset\u201d. Starting it from the "
+        "launcher plays that copy. Export to launcher, or File \u203a Sync launcher, "
+        "updates it."
+    )
+
+    # Exported, and read again: the same.
+    export_playset(book, stored, library, backups)
+    again = Scanner(*sample_install.scanner_args())(JobContext())
+    stored = book.get(main.id)
+    assert stored is not None and not launcher_difference(stored, again)

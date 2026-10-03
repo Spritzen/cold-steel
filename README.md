@@ -152,6 +152,9 @@ authors' work, so don't upload it.
 - **File › Sync launcher** replaces all the launcher's playsets with Cold
   Steel's, after asking. Launcher playsets that aren't in Cold Steel are
   removed.
+- When the launcher's copy of a playset differs from Cold Steel's, a line
+  above the mod list says how. Starting it from the launcher would play that
+  copy.
 - **Save to file** and **Load from file** share a playset with a friend. The
   file uses the launcher's own format, and Irony Mod Manager's exports load
   too.

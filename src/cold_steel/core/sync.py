@@ -5,9 +5,13 @@ launcher database, after a backup, and only while the launcher is closed.
 Open in launcher exports, makes the playset the launcher's active one, then
 asks Steam to start the game, which opens the launcher. Sync launcher exports
 every playset at once and removes the launcher's others.
+
+A playset we imported or exported remembers its launcher copy, so we can say
+when the two have drifted apart (launcher_difference).
 """
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import msgspec
@@ -26,6 +30,9 @@ from cold_steel.paradox.launcher_db import (
     write_playset,
 )
 from cold_steel.store.playsets import Playset
+
+# How many mod names a difference names before "and N more".
+NAMED = 3
 
 
 class SyncError(Exception):
@@ -83,6 +90,69 @@ def sync_launcher(book: PlaysetBook, library: Library, backup_dir: Path) -> Repl
         if launcher_id != playset.launcher_id:
             book.update(msgspec.structs.replace(playset, launcher_id=launcher_id))
     return result
+
+
+@dataclass(frozen=True)
+class LauncherDifference:
+    """How the launcher's copy of a playset differs from ours."""
+
+    missing: tuple[str, ...] = ()  # names of mods ours has and the launcher's copy doesn't
+    extra: tuple[str, ...] = ()  # names of mods only the launcher's copy has
+    switched: tuple[str, ...] = ()  # names of mods on in one copy and off in the other
+    order: bool = False  # the mods both have are in a different order
+    name: str = ""  # the launcher's name for it, if that differs
+
+    def __bool__(self) -> bool:
+        return bool(self.missing or self.extra or self.switched or self.order or self.name)
+
+
+def launcher_difference(playset: Playset, library: Library) -> LauncherDifference:
+    """How the launcher's copy of this playset (by its launcher_id) differs from it.
+
+    Empty when they match, or there's no copy to compare with. Mods that aren't
+    installed are left out on both sides: export can't write them either, so
+    they'd never match. DLCs aren't compared, as the launcher only lists the
+    DLCs it knows.
+    """
+    theirs = next((p for p in library.launcher_playsets if p.id == playset.launcher_id), None)
+    if not playset.launcher_id or theirs is None:
+        return LauncherDifference()
+    installed = {m.key: m.name for m in library.mods}
+    ours_on = {e.key: e.enabled for e in playset.entries if e.key in installed}
+    theirs_on = {e.key: e.enabled for e in theirs.entries if e.key in installed}
+    both = [k for k in ours_on if k in theirs_on]
+    return LauncherDifference(
+        missing=tuple(installed[k] for k in ours_on if k not in theirs_on),
+        extra=tuple(installed[k] for k in theirs_on if k not in ours_on),
+        switched=tuple(installed[k] for k in both if ours_on[k] != theirs_on[k]),
+        order=both != [k for k in theirs_on if k in ours_on],
+        name=theirs.name if theirs.name != playset.name else "",
+    )
+
+
+def describe_difference(diff: LauncherDifference) -> str:
+    """One line for the user, naming a few of the mods."""
+    parts: list[str] = []
+    for names, what in (
+        (diff.missing, "doesn't have"),
+        (diff.extra, "also has"),
+        (diff.switched, "has a different on/off setting for"),
+    ):
+        if names:
+            shown = ", ".join(names[:NAMED])
+            if len(names) > NAMED:
+                shown += f" and {len(names) - NAMED} more"
+            parts.append(f"{what} {shown}")
+    if diff.order:
+        parts.append("has the mods in a different order")
+    if diff.name:
+        parts.append(f"is called \u201c{diff.name}\u201d")
+    return (
+        "The launcher's copy of this playset is out of date: it "
+        + "; it ".join(parts)
+        + ". Starting it from the launcher plays that copy. Export to launcher, or "
+        "File \u203a Sync launcher, updates it."
+    )
 
 
 def _refuse_if_launcher_open() -> None:

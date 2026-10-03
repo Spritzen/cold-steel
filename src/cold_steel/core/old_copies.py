@@ -20,6 +20,12 @@ Two things must both be true before we say so:
 Older alone is too common: authors often don't update `supported_version`.
 On the real playsets, each test alone flagged mods that worked; together they
 flagged only the one that broke.
+
+The game's graphics entities (`gfx/**/*.asset`) are the exception: a mod of
+any version that replaces one of those files and leaves game entities defined
+nowhere gets a softer note (`soft`). Real Space - System Scale says 4.5 but
+ships older copies, which drop 116 of the game's entities. Only six installed
+mods replace those files at all, so this stays quiet.
 """
 
 from collections import Counter
@@ -44,6 +50,8 @@ class OldCopy:
     replaces_version: str
     files: tuple[str, ...]  # the replaced files, as the newer mod writes them
     missing: tuple[ObjectKey, ...]  # (kind, name): defined there, now nowhere
+    # Not made for an older game: only the game's graphics entities go missing.
+    soft: bool = False
 
 
 def find_old_copies(found: Found, versions: Mapping[str, str]) -> tuple[OldCopy, ...]:
@@ -78,7 +86,7 @@ def find_old_copies(found: Found, versions: Mapping[str, str]) -> tuple[OldCopy,
         new = versions.get(winner, "")
         won = index.layers[winner].files[tables[winner].paths[folded]]
         for loser in owners[:-1]:
-            if not is_outdated(new, versions.get(loser, "")):
+            if not is_outdated(new, versions.get(loser, "")) and not _game_entities(loser, folded):
                 continue
             path = tables[loser].paths[folded]
             lost = index.layers[loser].files[path]
@@ -99,12 +107,18 @@ def find_old_copies(found: Found, versions: Mapping[str, str]) -> tuple[OldCopy,
             versions.get(replaces, ""),
             tuple(sorted(files, key=str.casefold)),
             tuple(missing),
+            soft=not is_outdated(versions.get(mod, ""), versions.get(replaces, "")),
         )
         for (mod, replaces), (files, missing) in pairs.items()
         if missing
     ]
-    copies.sort(key=lambda c: (-len(c.missing), c.mod, c.replaces))
+    copies.sort(key=lambda c: (c.soft, -len(c.missing), c.mod, c.replaces))
     return tuple(copies)
+
+
+def _game_entities(layer: str, folded: str) -> bool:
+    """Is this the game's own graphics entity file, checked whatever the versions?"""
+    return layer == GAME and folded.startswith("gfx/") and folded.endswith(".asset")
 
 
 def describe(copy: OldCopy, names: Mapping[str, str]) -> str:
@@ -114,6 +128,13 @@ def describe(copy: OldCopy, names: Mapping[str, str]) -> str:
     more = len(copy.missing) - NAMED
     if more > 0:
         shown += f" and {more} more"
+    if copy.soft:
+        return (
+            f"{mod} replaces {len(copy.files)} of the game's graphics files with copies "
+            f"that leave out {len(copy.missing)} of its entities: {shown}. It says it's made "
+            f"for {copy.mod_version}, so this may be on purpose. If not, it's an old copy, "
+            "and those models and effects won't show."
+        )
     if copy.replaces == GAME:
         return (
             f"{mod}, made for {copy.mod_version}, replaces {len(copy.files)} of the game's "

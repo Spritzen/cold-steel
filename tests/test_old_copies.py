@@ -102,3 +102,49 @@ def test_a_current_mod_replacing_the_games_own_file_isnt_flagged(
     game_file = "common/scripted_triggers/00_game_triggers.txt"
     write(sample_install, {GAME: {game_file: NEW}, ALPHA: {game_file: OLD}})
     assert old_copies(sample_install, ALPHA) == ()
+
+
+ENTITIES = b"""entity = { name = "core_entity" pdxmesh = "core_mesh" }
+entity = { name = "starlit_entity" pdxmesh = "starlit_mesh" }
+entity = { name = "voidspawn_entity" pdxmesh = "voidspawn_mesh" }
+"""
+OLD_ENTITIES = b'entity = { name = "core_entity" pdxmesh = "core_mesh_v2" }\n'
+ASSET = "gfx/models/effects/_system_effects_entities.asset"
+
+
+def test_a_current_mod_dropping_the_games_entities_gets_a_softer_note(
+    sample_install: SampleInstall,
+) -> None:
+    # Alpha says it's made for this game, but its copy of the file is older.
+    write(sample_install, {GAME: {ASSET: ENTITIES}, ALPHA: {ASSET: OLD_ENTITIES}})
+
+    [copy] = old_copies(sample_install, ALPHA)
+
+    assert (copy.mod, copy.replaces, copy.soft) == (ALPHA, GAME, True)
+    assert [key for _, key in copy.missing] == ["starlit_entity", "voidspawn_entity"]
+    assert describe(copy, {ALPHA: "Alpha"}) == (
+        "Alpha replaces 1 of the game's graphics files with copies that leave out 2 of its "
+        "entities: starlit_entity, voidspawn_entity. It says it's made for v4.5.*, so this "
+        "may be on purpose. If not, it's an old copy, and those models and effects won't show."
+    )
+
+
+def test_entities_defined_elsewhere_arent_missing(sample_install: SampleInstall) -> None:
+    write(
+        sample_install,
+        {
+            GAME: {ASSET: ENTITIES},
+            ALPHA: {
+                ASSET: OLD_ENTITIES,
+                "gfx/models/effects/alpha_entities.asset": ENTITIES,
+            },
+        },
+    )
+    assert old_copies(sample_install, ALPHA) == ()
+
+
+def test_an_older_mod_dropping_entities_gets_the_full_note(sample_install: SampleInstall) -> None:
+    write(sample_install, {GAME: {ASSET: ENTITIES}, BETA: {ASSET: OLD_ENTITIES}})
+    [copy] = old_copies(sample_install, BETA)
+    assert not copy.soft
+    assert "made for 3.*, replaces 1 of the game's own files" in describe(copy, {})

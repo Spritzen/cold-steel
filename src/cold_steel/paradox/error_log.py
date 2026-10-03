@@ -21,7 +21,7 @@ FILE_NAME = "logs/error.log"  # inside the Paradox user data folder
 
 _ENTRY = re.compile(r"\[(\d\d:\d\d:\d\d)\]\[([^\]]*)\]: ?(.*)")
 
-_PATH = r"(?:[\w!.\-]+/)+[\w!.\-]+?\.[A-Za-z0-9]{2,5}"
+_PATH = r"(?:[\w!.\-]+/)+[\w!.\-]+?\.[A-Za-z0-9]{2,6}"
 
 # In the order they're tried. The first match is the file the error is about.
 _FILE_REFS = (
@@ -38,7 +38,7 @@ _FILE_REFS = (
     # Could not find files for mod: /home/.../workshop/content/281990/688086068
     re.compile(r"Could not find files for mod: (?P<file>/.+)"),
     # Any path: Couldn't find texture "gfx/models/x.dds"
-    re.compile(r"(?<![\w/.])(?P<file>/?(?:[\w!.\-]+/)+[\w!.\-]+\.[A-Za-z0-9]{2,5})(?![\w/])"),
+    re.compile(r"(?<![\w/.])(?P<file>/?(?:[\w!.\-]+/)+[\w!.\-]+\.[A-Za-z0-9]{2,6})(?![\w/])"),
 )
 
 _INLINE = re.compile(rf"(?P<file>{_PATH}):(?P<line>\d+)\(inline_script\)")
