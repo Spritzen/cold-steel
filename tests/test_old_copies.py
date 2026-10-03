@@ -1,9 +1,10 @@
 """Old copies: a mod made for an older game replacing a newer mod's files.
 
-Alpha is made for v4.5.*, Beta for 3.*, so Beta is the older mod.
+Alpha is made for v4.5.*, Beta for 3.*, so Beta is the older mod. The game is v4.5.1.
 """
 
 from cold_steel.core.conflicts import Found
+from cold_steel.core.index import GAME
 from cold_steel.core.old_copies import OldCopy, describe, find_old_copies
 from conftest import SampleInstall
 from test_conflicts import ALPHA, BETA, find, scan, write
@@ -15,7 +16,10 @@ FILE = "common/scripted_triggers/alpha_triggers.txt"
 
 def old_copies(install: SampleInstall, *order: str) -> tuple[OldCopy, ...]:
     found: Found = find(install, *order)
-    versions = {m.key: m.supported_version for m in scan(install).every_mod}
+    library = scan(install)
+    versions = {GAME: library.game.version} | {
+        m.key: m.supported_version for m in library.every_mod
+    }
     return find_old_copies(found, versions)
 
 
@@ -70,3 +74,31 @@ def test_an_older_mod_that_loses_nothing_isnt_flagged(sample_install: SampleInst
     # Authors often don't update supported_version. If nothing goes missing, it's fine.
     write(sample_install, {ALPHA: {FILE: NEW}, BETA: {FILE: NEW.replace(b"yes", b"no")}})
     assert old_copies(sample_install, ALPHA, BETA) == ()
+
+
+def test_an_older_mod_replacing_the_games_own_file_is_found(
+    sample_install: SampleInstall,
+) -> None:
+    # Beta ships a copy of a game file from before the game added two triggers.
+    game_file = "common/scripted_triggers/00_game_triggers.txt"
+    write(sample_install, {GAME: {game_file: NEW}, BETA: {game_file: OLD}})
+
+    [copy] = old_copies(sample_install, BETA)
+
+    assert (copy.mod, copy.replaces) == (BETA, GAME)
+    assert (copy.mod_version, copy.replaces_version) == ("3.*", "v4.5.1")
+    assert copy.files == (game_file,)
+    assert [key for _, key in copy.missing] == ["alpha_b", "alpha_c"]
+    assert describe(copy, {BETA: "Beta"}) == (
+        "Beta, made for 3.*, replaces 1 of the game's own files (v4.5.1) with older copies. "
+        "2 thing(s) the game defines there are then missing: alpha_b, alpha_c."
+    )
+
+
+def test_a_current_mod_replacing_the_games_own_file_isnt_flagged(
+    sample_install: SampleInstall,
+) -> None:
+    # Alpha is made for this game version, so its copy is as new as the game's.
+    game_file = "common/scripted_triggers/00_game_triggers.txt"
+    write(sample_install, {GAME: {game_file: NEW}, ALPHA: {game_file: OLD}})
+    assert old_copies(sample_install, ALPHA) == ()

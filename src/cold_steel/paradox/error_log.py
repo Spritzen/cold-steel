@@ -21,10 +21,18 @@ FILE_NAME = "logs/error.log"  # inside the Paradox user data folder
 
 _ENTRY = re.compile(r"\[(\d\d:\d\d:\d\d)\]\[([^\]]*)\]: ?(.*)")
 
+_PATH = r"(?:[\w!.\-]+/)+[\w!.\-]+?\.[A-Za-z0-9]{2,5}"
+
 # In the order they're tried. The first match is the file the error is about.
 _FILE_REFS = (
+    # A chain, where the problem is in the first file and the rest is how the
+    # game got there: common/a.txt:12 @ in scripted trigger t at file: b.txt line: 3
+    re.compile(rf"(?<![\w/.])(?P<file>{_PATH}):(?P<line>\d+) @ "),
     # file: gfx/x.txt line: 44   /   in file: "sound/x.asset" near line: 16
-    re.compile(r'file: *"?(?P<file>[^"\n]+?)"? +(?:near )?line: *(?P<line>\d+)'),
+    # /   in file: " file: common/x.txt line: 524
+    re.compile(r'file: *"?(?: *file: *)?(?P<file>[^"\n]+?)"? +(?:near )?line: *(?P<line>\d+)'),
+    # No space before "line": Corrupt Event Table Entry - } in events/x.txtline: 6838
+    re.compile(rf"(?<![\w/.])(?P<file>{_PATH})line: *(?P<line>\d+)"),
     # common/scripted_triggers/x.txt:64
     re.compile(r"(?<![\w/.])(?P<file>(?:[\w!.\-]+/)+[\w!.\-]+\.\w+):(?P<line>\d+)"),
     # Could not find files for mod: /home/.../workshop/content/281990/688086068
@@ -32,6 +40,8 @@ _FILE_REFS = (
     # Any path: Couldn't find texture "gfx/models/x.dds"
     re.compile(r"(?<![\w/.])(?P<file>/?(?:[\w!.\-]+/)+[\w!.\-]+\.[A-Za-z0-9]{2,5})(?![\w/])"),
 )
+
+_INLINE = re.compile(rf"(?P<file>{_PATH}):(?P<line>\d+)\(inline_script\)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +75,13 @@ def _entry(time: str, source: str, text: str) -> LogEntry:
     for pattern in _FILE_REFS:
         match = pattern.search(text)
         if match:
-            line = match.groupdict().get("line")
-            return LogEntry(time, source, text, match["file"].strip(), int(line or 0))
+            file, line = match["file"].strip(), int(match.groupdict().get("line") or 0)
+            # file: script value x at file: events/y.txt line: 138 names where x is used.
+            file = file.rsplit(" at file: ", 1)[-1]
+            # file: "common/x.txt:747(inline_script) common/inline_scripts/y.txt" line: 14
+            # is an inline script used at line 747 of common/x.txt. That's the file to match.
+            inline = _INLINE.match(file)
+            if inline:
+                file, line = inline["file"], int(inline["line"])
+            return LogEntry(time, source, text, file, line)
     return LogEntry(time, source, text)

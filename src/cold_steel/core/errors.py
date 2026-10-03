@@ -12,9 +12,22 @@ exists, using the one at ...". That's what mods are for, and on a real
 24-mod playset it was 84% of the log. Those are marked `override`, so the
 window can fold them away (is_override).
 
+Universal Resource Patch and mods like it list resources from many mods, so
+any you have show in the top bar. Each one you don't have logs a line, which
+is how they're meant to work. Those are marked `resource` and folded away too
+(is_missing_resource).
+
 The game also reads every mod/*.mod file as it starts, loaded or not, and
 logs problems in them. Those errors name a mod that wasn't loaded, so its
 group is marked `loaded=False` and listed after the loaded mods.
+
+A Cold Steel build is one mod holding every file of a playset. Its record
+says which mod each file came from, so errors in a build are grouped under
+those mods, not under the build.
+
+When the game can't read a file past some point, the objects defined after it
+never load, and errors about them show up in other files. A parse error names
+those objects (`lost`), so the window can say so.
 """
 
 import os
@@ -23,8 +36,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from cold_steel.core.build import BuildRecord, BuiltFile, builds_dir, built_from, load_record
+from cold_steel.core.definitions import read_definitions
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
+from cold_steel.core.merge_rules import Rules, load_rules
 from cold_steel.core.mods import Mod, ModFiles
 from cold_steel.paradox.dlc_load import FILE_NAME as DLC_LOAD
 from cold_steel.paradox.dlc_load import read_dlc_load
@@ -45,9 +61,24 @@ _OVERRIDE = re.compile(
 )
 
 
+# Where the game reads the top bar's resource lists, in interface/resource_groups/.
+_RESOURCE_SOURCE = "strategic_resources_gui_group.cpp"
+
+# An entry saying the game stopped understanding a file at some line.
+_PARSE_BREAK = re.compile(r'Error: "Unexpected token:|Corrupt Event Table Entry')
+
+
 def is_override(text: str) -> bool:
     """Is this entry only the game saying one definition replaced another?"""
     return _OVERRIDE.match(text) is not None
+
+
+def is_missing_resource(source: str, text: str) -> bool:
+    """Is this entry only a top-bar resource list naming a resource that isn't installed?
+
+    Keyed on the place in the game's code that logs it, not on mod names.
+    """
+    return source.startswith(_RESOURCE_SOURCE) and text.startswith("Failed to read key reference")
 
 
 @dataclass(frozen=True)
@@ -60,6 +91,15 @@ class GameError:
     count: int = 1  # how many times this same error was logged
     code: str = ""  # the text of `line` in `file`, if it could be read
     override: bool = False  # only says one definition replaced another (is_override)
+    resource: bool = False  # only a top-bar resource that isn't installed (is_missing_resource)
+    # A parse error: the objects defined after `line` in `file`, lost if the game
+    # stopped reading there.
+    lost: tuple[str, ...] = ()
+
+    @property
+    def normal(self) -> bool:
+        """Folded away by default: it doesn't mean anything is wrong."""
+        return self.override or self.resource
 
 
 @dataclass(frozen=True)
@@ -77,6 +117,10 @@ class ErrorGroup:
     def overrides(self) -> int:
         return sum(e.count for e in self.errors if e.override)
 
+    @property
+    def resources(self) -> int:
+        return sum(e.count for e in self.errors if e.resource)
+
 
 @dataclass(frozen=True)
 class ErrorReport:
@@ -85,6 +129,7 @@ class ErrorReport:
     groups: tuple[ErrorGroup, ...] = ()  # most errors first; the game's group last
     # The mod list changed after this run, so some errors may be matched to the wrong mod.
     stale: bool = False
+    build: str = ""  # the name of a loaded build whose errors were traced to its mods
 
     @property
     def total(self) -> int:
@@ -95,9 +140,13 @@ class ErrorReport:
         return sum(g.overrides for g in self.groups)
 
     @property
+    def resources(self) -> int:
+        return sum(g.resources for g in self.groups)
+
+    @property
     def problems(self) -> int:
-        """Everything but the overrides."""
-        return self.total - self.overrides
+        """Everything but the overrides and missing resources."""
+        return self.total - self.overrides - self.resources
 
 
 @dataclass
@@ -105,6 +154,7 @@ class ErrorReader:
     """Reads error.log and groups its errors by mod. Call it with a JobContext."""
 
     library: Library
+    builds: Path = field(default_factory=builds_dir)  # where build records are
 
     def __call__(self, ctx: JobContext) -> ErrorReport:
         game = self.library.game
@@ -118,6 +168,7 @@ class ErrorReader:
 
         loaded = self._loaded_mods()
         index = _FileIndex(loaded, self.library)
+        builds = self._build_records(loaded)
         by_descriptor = _by_descriptor(self.library.every_mod)
         by_folder = {
             os.path.normpath(m.root or m.archive): m for m in self.library.every_mod if m.installed
@@ -128,24 +179,35 @@ class ErrorReader:
             if done % 500 == 0:
                 ctx.progress(done, len(entries), "Matching errors to mods")
             mod, file = self._owner(entry, index, by_descriptor, by_folder)
-            key = mod.key if mod else GAME
+            key, shown = mod.key if mod else GAME, file
+            if mod is not None and mod.key in builds:
+                # Group it under the mod the build's file came from.
+                built = builds[mod.key].files.get(file.casefold())
+                if built is not None:
+                    key, shown = built.layer, built.source
             same = grouped.setdefault(key, {})
             seen = same.get((entry.source, entry.text))
             if seen:
                 same[(entry.source, entry.text)] = replace(seen, count=seen.count + 1)
-            else:
-                same[(entry.source, entry.text)] = GameError(
-                    entry.time,
-                    entry.source,
-                    entry.text,
-                    file,
-                    entry.line,
-                    code=index.code(mod, file, entry.line),
-                    override=is_override(entry.text),
-                )
+                continue
+            parse_break = _PARSE_BREAK.match(entry.text) is not None
+            same[(entry.source, entry.text)] = GameError(
+                entry.time,
+                entry.source,
+                entry.text,
+                shown,
+                entry.line,
+                code=index.code(mod, file, entry.line),
+                override=is_override(entry.text),
+                resource=is_missing_resource(entry.source, entry.text),
+                lost=index.defined_after(mod, file, entry.line) if parse_break else (),
+            )
 
         names = {m.key: m.name for m in self.library.every_mod}
         loaded_keys = {m.key for m in loaded}
+        for build in builds.values():
+            names = build.record.names | names
+            loaded_keys.update(build.record.order)
         groups = [
             ErrorGroup(
                 key,
@@ -161,7 +223,28 @@ class ErrorReader:
             stale = (game.data_dir / DLC_LOAD).stat().st_mtime > written
         except OSError:
             stale = False
-        return ErrorReport(log_file, written, tuple(groups), stale)
+        # A build rebuilt after the run may have taken some files from other mods.
+        stale = stale or any(b.saved > written for b in builds.values())
+        build_names = ", ".join(names.get(k, k) for k in builds)
+        return ErrorReport(log_file, written, tuple(groups), stale, build_names)
+
+    def _build_records(self, loaded: Iterable[Mod]) -> dict[str, _Build]:
+        """The record of each loaded build, by the build's Mod.key."""
+        builds: dict[str, _Build] = {}
+        for mod in loaded:
+            playset_id = built_from(mod.key)
+            if playset_id is None:
+                continue
+            record = load_record(self.builds, playset_id)
+            if record is None:
+                continue
+            try:
+                saved = (self.builds / f"{playset_id}.json").stat().st_mtime
+            except OSError:
+                saved = 0.0
+            files = {path.casefold(): built for path, built in record.files.items()}
+            builds[mod.key] = _Build(record, files, saved)
+        return builds
 
     def _loaded_mods(self) -> list[Mod]:
         """The mods in dlc_load.json, in load order."""
@@ -205,6 +288,13 @@ class ErrorReader:
         return index.owner(file)
 
 
+@dataclass(frozen=True)
+class _Build:
+    record: BuildRecord
+    files: dict[str, BuiltFile]  # by path in the build, casefolded
+    saved: float  # when the record was written
+
+
 def _by_descriptor(mods: Iterable[Mod]) -> dict[str, Mod]:
     """Mods by the name of their mod/*.mod file."""
     return {Path(m.descriptor_file).name: m for m in mods if m.descriptor_file}
@@ -218,6 +308,8 @@ class _FileIndex:
     library: Library
     _owners: dict[str, tuple[Mod, str]] = field(default_factory=dict)
     _lines: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    _defined: dict[tuple[str, str], tuple[tuple[int, str], ...]] = field(default_factory=dict)
+    _rules: Rules | None = None
 
     def __post_init__(self) -> None:
         for mod in self.mods:  # later mods replace earlier ones
@@ -238,28 +330,42 @@ class _FileIndex:
             return ""
         key = (mod.key if mod else GAME, file)
         if key not in self._lines:
-            self._lines[key] = self._read_lines(mod, file)
+            data = self._read(mod, file)
+            self._lines[key] = data.decode("utf-8-sig", errors="replace").splitlines()
         lines = self._lines[key]
         return lines[line - 1].strip()[:200] if line <= len(lines) else ""
 
-    def _read_lines(self, mod: Mod | None, file: str) -> list[str]:
+    def defined_after(self, mod: Mod | None, file: str, line: int) -> tuple[str, ...]:
+        """The names of the objects a script file defines after `line`."""
+        if line <= 0 or not file:
+            return ()
+        key = (mod.key if mod else GAME, file)
+        if key not in self._defined:
+            self._rules = self._rules or load_rules()
+            rule = self._rules.for_file(file)
+            if rule.unit in ("file", "localisation"):
+                self._defined[key] = ()
+            else:
+                found = read_definitions(file, self._read(mod, file), rule, "")
+                self._defined[key] = tuple((d.line, d.key) for d in found)
+        return tuple(name for start, name in self._defined[key] if start > line)
+
+    def _read(self, mod: Mod | None, file: str) -> bytes:
         if mod is None:
             game_dir = self.library.game.install_dir
             path = game_dir / file
             try:
                 if not path.resolve().is_relative_to(game_dir.resolve()):
-                    return []
+                    return b""
                 data: bytes | None = path.read_bytes()
             except OSError:
-                return []
+                return b""
         elif mod.descriptor_file and file == Path(mod.descriptor_file).name:
             try:
                 data = Path(mod.descriptor_file).read_bytes()
             except OSError:
-                return []
+                return b""
         else:
             with ModFiles(mod, self.library.files.get(mod.key, {})) as files:
                 data = files.read(file)
-        if data is None:
-            return []
-        return data.decode("utf-8-sig", errors="replace").splitlines()
+        return data or b""
