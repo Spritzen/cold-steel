@@ -8,6 +8,7 @@ from typing import Any
 from msgspec.structs import replace as msgspec_replace
 from PySide6.QtCore import (
     QEvent,
+    QFile,
     QModelIndex,
     QObject,
     QPoint,
@@ -76,6 +77,7 @@ from cold_steel.core.index import Index, Indexer
 from cold_steel.core.jobs import Job, JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.load_order import sort_playset
+from cold_steel.core.local_mods import LocalFiles, local_files
 from cold_steel.core.mods import Mod, base_key
 from cold_steel.core.old_copies import OldCopy, describe, find_old_copies
 from cold_steel.core.patch import (
@@ -1052,7 +1054,57 @@ class MainWindow(QMainWindow):
             menu.addAction("Delete built mod…").triggered.connect(
                 lambda: self.delete_build(built[0])
             )
+        if len(keys) == 1 and self._local_files(keys[0]) is not None:
+            menu.addSeparator()
+            menu.addAction("Delete local mod…").triggered.connect(
+                lambda: self.delete_local_mod(keys[0])
+            )
         menu.popup(self.table.viewport().mapToGlobal(pos))
+
+    def _local_files(self, key: str) -> LocalFiles | None:
+        library = self.library
+        mod = next((m for m in library.mods if m.key == key), None) if library else None
+        return local_files(mod, library.game.mod_dir) if library and mod else None
+
+    def delete_local_mod(self, key: str) -> None:
+        """Move a local mod's .mod file and folder (or zip) to the trash."""
+        library, book = self.library, self.book
+        files = self._local_files(key)
+        if library is None or book is None or files is None:
+            return
+        name = next(m.name for m in library.mods if m.key == key)
+        title = "Delete local mod"
+        gone = "\n".join(
+            f"  {p}" + (" (just the link)" if p == files.content and files.link else "")
+            for p in files.paths
+        )
+        text = f"Move \u201c{name}\u201d to the trash? These go:\n{gone}"
+        if files.kept is not None:
+            text += f"\n\nIts files stay where they are, outside the mod folder:\n  {files.kept}"
+        users = [p for p in book.playsets if any(e.key == key for e in p.entries)]
+        if users:
+            names = ", ".join(f"\u201c{p.name}\u201d" for p in users)
+            text += f"\n\nIt's also taken out of {names}."
+        if not self.confirm(title, text):
+            return
+        failed = []
+        for path in files.paths:
+            if path == files.content and files.link:
+                try:
+                    path.unlink()  # never what the link points at
+                except OSError:
+                    failed.append(path)
+            elif not self.trash(path):
+                failed.append(path)
+        if failed:
+            listed = "\n".join(f"  {p}" for p in failed)
+            self.tell(title, f"These couldn't be moved to the trash:\n{listed}")
+        else:
+            # Gone for good, so playsets drop it instead of showing it as missing.
+            for playset in users:
+                book.update(ops.remove_mods(playset, [key]))
+            self.statusBar().showMessage(f"Moved {name} to the trash")
+        self.rescan()  # the rescan redraws the table and the playset counts
 
     def _workshop_id(self, key: str) -> str:
         """The mod's Steam Workshop ID, or "" if it isn't on the Workshop."""
@@ -1658,6 +1710,9 @@ class MainWindow(QMainWindow):
     def confirm(self, title: str, text: str) -> bool:
         answer = QMessageBox.question(self, title, text)
         return answer == QMessageBox.StandardButton.Yes
+
+    def trash(self, path: Path) -> bool:
+        return QFile(str(path)).moveToTrash()
 
     def open_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))

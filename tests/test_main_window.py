@@ -952,6 +952,68 @@ def test_delete_a_built_mod(
     assert not clashing.delete_build_action.isEnabled()
 
 
+def test_delete_a_local_mod(
+    qtbot: QtBot,
+    window: MainWindow,
+    sample_install: SampleInstall,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod_dir = sample_install.data_dir / "mod"
+    asked: list[str] = []
+    answer = False
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return answer
+
+    trashed: list[Path] = []
+    bin_ = tmp_path / "trash"
+    bin_.mkdir()
+
+    def trash(path: Path) -> bool:
+        trashed.append(path)
+        path.rename(bin_ / path.name)
+        return True
+
+    monkeypatch.setattr(window, "confirm", confirm)
+    monkeypatch.setattr(window, "trash", trash)
+
+    # Saying no deletes nothing.
+    window.delete_local_mod("local:my_local")
+    assert "My Local Tweaks" in asked[0] and str(mod_dir / "my_local") in asked[0]
+    assert trashed == []
+
+    answer = True
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.delete_local_mod("local:my_local")
+    assert trashed == [mod_dir / "my_local.mod", mod_dir / "my_local"]
+    assert window.library is not None
+    assert "local:my_local" not in {m.key for m in window.library.mods}
+
+    # It's taken out of its playset too, not left there as missing.
+    assert "Main Playset" in asked[1]
+    assert window.playset_list.item(1).text() == "Main Playset (3)"
+    window.playset_list.setCurrentRow(1)
+    assert shown(window) == ["Alpha Interface", "Gamma Soundtrack", "Unsubscribed Mod"]
+
+    # Workshop mods can't be deleted this way.
+    window.delete_local_mod("workshop:2000000001")
+    assert len(asked) == 2
+
+
+def test_a_deleted_local_mod_lands_in_the_trash(
+    qtbot: QtBot, window: MainWindow, sample_install: SampleInstall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real trash: $HOME is the sample install's, so it's the one in there.
+    monkeypatch.setattr(window, "confirm", lambda title, text: True)
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.delete_local_mod("local:my_local")
+    trash = sample_install.home / ".local/share/Trash/files"
+    assert sorted(p.name for p in trash.iterdir()) == ["my_local", "my_local.mod"]
+    assert "My Local Tweaks" not in shown(window)
+
+
 # Phase 7: settings, shortcuts, help
 
 

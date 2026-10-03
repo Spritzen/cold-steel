@@ -91,6 +91,10 @@ left to see its mods. Then you can:
   rules.
 - **DLC…** chooses which DLC the playset loads.
 - **▶ Play** starts Stellaris with the playset. The Paradox launcher isn't needed.
+- **Delete a local mod**: right-click it, **Delete local mod…**. After you
+  say yes, its `.mod` file and folder go to the trash. If the folder is a link,
+  only the link goes. A folder outside the mod folder is left alone. The mod
+  is also taken out of every playset that had it.
 
 The buttons under the list make, copy, rename and delete playsets. The
 playset you last played is in bold.
