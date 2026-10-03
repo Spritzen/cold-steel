@@ -12,7 +12,7 @@ from cold_steel.store.settings import Settings
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
-from cold_steel.ui.mod_table import MOD_ROLE, NO_PLAYSET, Column
+from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
 from conftest import SampleInstall
 
 
@@ -120,14 +120,22 @@ def test_include_or_exclude_a_playset(window: MainWindow) -> None:
     assert shown(window) == ["Beta Ships", "broken"]
 
     # Renaming a playset keeps it chosen, under its new name.
+    window.playset_list.setCurrentRow(1)
     playsets.setCurrentIndex(playsets.findText("Main Playset"))
     assert include.currentText() == "Exclude"
     assert window.book is not None
-    window.playset_list.setCurrentRow(1)
     window._playset_changed(window.book.rename(playsets.currentData(), "Renamed"))
     assert playsets.currentText() == "Renamed"
+    assert include.currentText() == "Exclude"
+
+    # Picking another entry in the sidebar resets the filter to Include All.
     window.playset_list.setCurrentRow(0)
-    assert shown(window) == ["Beta Ships", "broken"]
+    assert playsets.currentData() == ALL
+    assert include.currentText() == "Include"
+    assert not include.isEnabled()
+    playsets.setCurrentIndex(playsets.findData(NO_PLAYSET))
+    window.playset_list.setCurrentRow(1)
+    assert playsets.currentData() == ALL
 
 
 def test_outdated_mods_are_shown_in_red(window: MainWindow) -> None:

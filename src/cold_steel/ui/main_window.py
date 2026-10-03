@@ -320,6 +320,7 @@ class MainWindow(QMainWindow):
 
     def _build_library_page(self) -> QWidget:
         self.playset_list = QListWidget()
+        self._sidebar_choice: str | None = None  # playset id picked in the sidebar
         self.playset_list.currentRowChanged.connect(self._playset_selected)
         self.playset_list.itemDoubleClicked.connect(lambda _: self.rename_playset())
 
@@ -828,6 +829,12 @@ class MainWindow(QMainWindow):
 
     def _playset_selected(self, row: int) -> None:
         playset = self.selected_playset()
+        choice = playset.id if playset else None
+        if choice != self._sidebar_choice:
+            # A new sidebar choice starts with the playset filter back on Include All.
+            # A refresh that keeps the same choice leaves the filter alone.
+            self._sidebar_choice = choice
+            self.membership_box.setCurrentIndex(0)
         self._show_playset(playset)
         self.table.setColumnHidden(Column.POSITION, playset is None)
         if playset is None:
