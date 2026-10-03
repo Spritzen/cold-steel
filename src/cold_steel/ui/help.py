@@ -30,7 +30,7 @@ exactly what it reads and what it changes.</p>
 changes them, and never downloads or subscribes to mods.</li>
 <li><b>Your launcher playsets.</b> The first time it opens, Cold Steel copies them
 into its own list. After that the launcher only changes when you press
-<b>Export to launcher</b>.</li>
+<b>Export to launcher</b> or <b>Sync launcher</b>.</li>
 </ul>
 
 <h3>It changes Paradox's files only when you ask</h3>
@@ -38,7 +38,8 @@ into its own list. After that the launcher only changes when you press
 <li><b>Play</b> writes <code>dlc_load.json</code>, which tells the game what to load. For a
 mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.</li>
 <li><b>Export to launcher</b> and <b>Open in launcher</b> write the playset into the
-launcher's database.</li>
+launcher's database. <b>File &rsaquo; Sync launcher</b> replaces all its playsets with
+Cold Steel's.</li>
 <li><b>Generate patch mod</b>, <b>Build</b> and <b>Pins</b> add their own mods to the
 game's <code>mod</code> folder. Their names start with <code>cold_steel_</code>.</li>
 </ul>

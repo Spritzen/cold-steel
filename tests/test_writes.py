@@ -16,7 +16,13 @@ from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library, Scanner
 from cold_steel.core.play import PlayError, plan_play, play
 from cold_steel.core.playsets import PlaysetBook
-from cold_steel.core.sync import SyncError, check_launcher_can_open, export_playset
+from cold_steel.core.sync import (
+    SyncError,
+    check_launcher_can_open,
+    export_playset,
+    import_playset,
+    sync_launcher,
+)
 from cold_steel.paradox import processes
 from cold_steel.paradox.backup import backup_file, backups_of
 from cold_steel.paradox.descriptor import parse_descriptor
@@ -196,6 +202,59 @@ def test_the_launcher_opens_only_when_nothing_is_in_the_way(
 
     monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
     check_launcher_can_open()
+
+
+def test_sync_makes_the_launchers_playsets_ours(
+    library: Library, book: PlaysetBook, backups: Path
+) -> None:
+    db = library.game.launcher_db
+    before = dump(db)
+    main, second = book.playsets
+    book.rename(main.id, "Main, renamed")
+    book.delete(second.id)
+    fresh = book.create("Fresh")
+    book.set_active(fresh.id)
+    # Imported twice: both copies point at the same launcher playset.
+    again = import_playset(book, library.launcher_playsets[0])
+
+    result = sync_launcher(book, library, backups)
+
+    assert result.backup is not None and dump(result.backup) == before
+    assert result.removed == 1  # Second Playset
+    launcher = read_launcher(db)
+    assert [p.name for p in launcher.playsets] == ["Main, renamed", "Fresh", again.name]
+    assert [p.name for p in launcher.playsets if p.active] == ["Fresh"]
+    assert len({p.id for p in launcher.playsets}) == 3
+    # Each remembers its launcher playset, so the next sync replaces, not adds.
+    assert [p.launcher_id for p in book.playsets] == [p.id for p in launcher.playsets]
+    sync_launcher(book, library, backups)
+    assert read_launcher(db).playsets == launcher.playsets
+
+
+def test_sync_keeps_the_launchers_active_one_if_it_stays(
+    library: Library, book: PlaysetBook, backups: Path
+) -> None:
+    book.delete(book.playsets[0].id)  # the active one, Main Playset
+    book.create("Fresh")
+    sync_launcher(book, library, backups)
+    launcher = read_launcher(library.game.launcher_db)
+    assert [p.name for p in launcher.playsets if p.active] == ["Second Playset"]
+
+
+def test_sync_refuses_while_the_launcher_runs_or_with_nothing_to_sync(
+    library: Library, book: PlaysetBook, backups: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = library.game.launcher_db
+    before = snapshot(db.parent, recursive=False)
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.LAUNCHER)
+    with pytest.raises(SyncError, match="launcher is open"):
+        sync_launcher(book, library, backups)
+    monkeypatch.setattr(processes, "running", lambda names: False)
+    for playset in book.playsets:
+        book.delete(playset.id)
+    with pytest.raises(SyncError, match="no playsets"):
+        sync_launcher(book, library, backups)
+    assert snapshot(db.parent, recursive=False) == before
 
 
 def test_a_failed_backup_leaves_the_database_alone(library: Library, tmp_path: Path) -> None:

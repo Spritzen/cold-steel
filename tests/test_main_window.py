@@ -342,6 +342,33 @@ def test_open_in_launcher_exports_as_active_then_starts_it(
     assert active == ["Second Playset"]
 
 
+def test_sync_launcher_asks_first(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cold_steel.paradox.launcher_db import read_launcher
+
+    assert window.library is not None
+    db = window.library.game.launcher_db
+    asked: list[str] = []
+    told: list[str] = []
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+    assert window.book is not None
+    window.book.delete(window.book.playsets[1].id)  # Second Playset
+
+    def refuse(title: str, text: str) -> bool:
+        asked.append(text)
+        return False
+
+    monkeypatch.setattr(window, "confirm", refuse)
+    window.sync_action.trigger()
+    assert "replaces all playsets in the Paradox launcher" in asked[0]
+    assert told == []
+    assert len(read_launcher(db).playsets) == 2  # said no: nothing changed
+
+    monkeypatch.setattr(window, "confirm", lambda title, text: True)
+    window.sync_action.trigger()
+    assert [p.name for p in read_launcher(db).playsets] == ["Main Playset"]
+    assert "1 other playset was removed" in told[0]
+
+
 def test_workshop_ids_for_the_steam_page(window: MainWindow) -> None:
     assert window._workshop_id("workshop:2000000001") == "2000000001"
     assert window._workshop_id("workshop:2000000001@abc") == "2000000001"
