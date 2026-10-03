@@ -109,6 +109,7 @@ from cold_steel.core.sync import (
     export_playset,
     import_playset,
     start_launcher,
+    sync_launcher,
 )
 from cold_steel.paradox import processes
 from cold_steel.paradox.game import Game, GameNotFound
@@ -273,8 +274,11 @@ class MainWindow(QMainWindow):
         search = action("Search &mods", self.focus_search, "Ctrl+F")
         settings = action("Se&ttings…", self.edit_settings, "Ctrl+,")
         quit_ = action("&Quit", self.close, QKeySequence(QKeySequence.StandardKey.Quit))
+        self.sync_action = action("S&ync launcher…", self.sync_launcher)
         menu = self.menuBar().addMenu("&File")
         menu.addActions([rescan, search, settings])
+        menu.addSeparator()
+        menu.addAction(self.sync_action)
         menu.addSeparator()
         menu.addAction(quit_)
 
@@ -864,6 +868,7 @@ class MainWindow(QMainWindow):
         self.delete_build_action.setEnabled(built)
         self.new_action.setEnabled(self.book is not None)
         self.load_file_action.setEnabled(self.book is not None)
+        self.sync_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
         self.playset_bar.setVisible(chosen)
         self._refresh_conflicts()
@@ -1174,6 +1179,44 @@ class MainWindow(QMainWindow):
                 "Close the launcher once it has found them, then open it from here again:\n"
                 + "\n".join(result.skipped),
             )
+
+    def sync_launcher(self) -> None:
+        """Replace every playset in the launcher with Cold Steel's, if the user agrees."""
+        if self.book is None or self.library is None:
+            return
+        count = len(self.book.playsets)
+        if not self.confirm(
+            "Sync launcher",
+            "Are you sure?\n\nThis replaces all playsets in the Paradox launcher with "
+            f"the {count} in Cold Steel. Launcher playsets that aren't in Cold Steel "
+            "are removed, and the others are changed to match.\n\n"
+            "The launcher database is backed up first.",
+        ):
+            return
+        try:
+            result = sync_launcher(self.book, self.library, self.backup_dir)
+        except (SyncError, LauncherDbError) as error:
+            self.tell("Sync launcher", str(error))
+            return
+        text = f"The launcher now has the same {count} playsets as Cold Steel."
+        if result.removed:
+            removed = (
+                "1 other playset was" if result.removed == 1 else f"{result.removed} others were"
+            )
+            text += f" {removed} removed from it."
+        missing = [
+            f"{playset.name}: {mod}"
+            for playset, skipped in zip(self.book.playsets, result.skipped, strict=True)
+            for mod in skipped
+        ]
+        if missing:
+            text += (
+                "\n\nThe launcher doesn't know these mods yet, so they were left out. "
+                "Open the launcher once so it finds them, then sync again:\n" + "\n".join(missing)
+            )
+        if result.backup:
+            text += f"\n\nThe launcher database was backed up first, to {result.backup}"
+        self.tell("Sync launcher", text)
 
     def save_to_file(self) -> None:
         playset = self.selected_playset()

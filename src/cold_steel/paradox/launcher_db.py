@@ -1,8 +1,9 @@
 """Reads and writes playsets in the Paradox launcher's `launcher-v2.sqlite`.
 
 Reading opens the file with SQLite's `mode=ro`, so it can't change anything.
-Writing (`write_playset`) backs the file up first (decision 6), and
-changes only the one playset it was given. Don't call it while the launcher
+Writing backs the file up first (decision 6). `write_playset` changes only
+the one playset it was given; `replace_playsets` makes the launcher's list
+exactly the one it was given. Don't call it while the launcher
 is running: the launcher keeps its own copy of the data in memory.
 """
 
@@ -10,8 +11,8 @@ import os
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Sequence
-from contextlib import closing
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -181,6 +182,99 @@ def write_playset(
     off, or None to leave it as it is. `active` makes it the playset the
     launcher shows when it opens.
     """
+    with _writing(db_path, backup_dir) as (conn, columns, backup):
+        pid, skipped = _write(conn, columns, name, mods, launcher_id, dlc_enabled)
+        if active:
+            conn.execute("UPDATE playsets SET isActive = (id = ?)", (pid,))
+    return WriteResult(launcher_id=pid, backup=backup, skipped=skipped)
+
+
+@dataclass(frozen=True)
+class PlaysetWrite:
+    """One playset for `replace_playsets`. The fields mean what they do in
+    `write_playset`."""
+
+    name: str
+    mods: Sequence[ExportMod]
+    launcher_id: str = ""
+    dlc_enabled: Callable[[str], bool | None] = lambda dlc_id: None
+
+
+@dataclass(frozen=True)
+class ReplaceResult:
+    launcher_ids: tuple[str, ...]  # one per playset given, in the same order
+    backup: Path | None
+    skipped: tuple[tuple[str, ...], ...]  # per playset: mods the launcher doesn't know yet
+    removed: int  # how many of the launcher's own playsets were removed
+
+
+def replace_playsets(
+    db_path: Path,
+    playsets: Sequence[PlaysetWrite],
+    *,
+    backup_dir: Path,
+    active: int | None = None,
+) -> ReplaceResult:
+    """Make the launcher's playsets exactly these, in this order, after one
+    backup. Each replaces its `launcher_id` if the launcher has it and no
+    earlier one took it, otherwise it's added. Every other playset is removed,
+    the way the launcher removes one. `active` is the index of the playset the
+    launcher shows when it opens; None keeps the launcher's choice if it
+    survives, else picks the first.
+    """
+    with _writing(db_path, backup_dir) as (conn, columns, backup):
+        now = int(time.time() * 1000)
+        ids: list[str] = []
+        skipped: list[tuple[str, ...]] = []
+        for n, playset in enumerate(playsets):
+            # Two of ours can come from the same launcher playset (imported twice).
+            launcher_id = playset.launcher_id if playset.launcher_id not in ids else ""
+            pid, missing = _write(
+                conn, columns, playset.name, playset.mods, launcher_id, playset.dlc_enabled
+            )
+            # The launcher lists playsets oldest first, so this keeps our order.
+            conn.execute("UPDATE playsets SET createdOn = ? WHERE id = ?", (now + n, pid))
+            ids.append(pid)
+            skipped.append(missing)
+
+        keep = ", ".join("?" * len(ids))
+        if "isRemoved" in columns["playsets"]:
+            removed = conn.execute(
+                f"UPDATE playsets SET isRemoved = 1, isActive = 0 "
+                f"WHERE NOT isRemoved AND id NOT IN ({keep})",
+                ids,
+            ).rowcount
+        else:
+            gone = [
+                r[0] for r in conn.execute(f"SELECT id FROM playsets WHERE id NOT IN ({keep})", ids)
+            ]
+            for pid in gone:
+                conn.execute("DELETE FROM playsets_mods WHERE playsetId = ?", (pid,))
+                if _has_table(conn, "playsets_dlcs"):
+                    conn.execute("DELETE FROM playsets_dlcs WHERE playsetId = ?", (pid,))
+                conn.execute("DELETE FROM playsets WHERE id = ?", (pid,))
+            removed = len(gone)
+
+        if active is not None:
+            conn.execute("UPDATE playsets SET isActive = (id = ?)", (ids[active],))
+        elif (
+            ids
+            and not conn.execute(
+                f"SELECT 1 FROM playsets WHERE isActive AND id IN ({keep})", ids
+            ).fetchone()
+        ):
+            conn.execute("UPDATE playsets SET isActive = (id = ?)", (ids[0],))
+    return ReplaceResult(
+        launcher_ids=tuple(ids), backup=backup, skipped=tuple(skipped), removed=removed
+    )
+
+
+@contextmanager
+def _writing(
+    db_path: Path, backup_dir: Path
+) -> Iterator[tuple[sqlite3.Connection, dict[str, set[str]], Path | None]]:
+    """Open the database for writing, lock it, back it up, and commit at the
+    end. Anything that goes wrong rolls back, so nothing is half written."""
     if not db_path.is_file():
         raise LauncherDbError(f"The launcher database isn't there: {db_path}")
     try:
@@ -195,9 +289,7 @@ def write_playset(
             try:
                 keep_original(db_path)
                 backup = backup_file(db_path, backup_dir)
-                pid, skipped = _write(conn, columns, name, mods, launcher_id, dlc_enabled)
-                if active:
-                    conn.execute("UPDATE playsets SET isActive = (id = ?)", (pid,))
+                yield conn, columns, backup
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -207,7 +299,6 @@ def write_playset(
         raise LauncherDbError(message) from error
     except sqlite3.Error as error:
         raise LauncherDbError(f"Couldn't write {db_path}: {error}") from error
-    return WriteResult(launcher_id=pid, backup=backup, skipped=skipped)
 
 
 def _write(
