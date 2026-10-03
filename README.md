@@ -85,6 +85,8 @@ left to see its mods. Then you can:
 
 - **Turn mods on and off** with the tick box, and **drag** them into order.
 - **Add mods** from **All mods**: select them, right-click, **Add to playset**.
+  To see only the mods a playset doesn't have yet, choose it in the filter
+  above the list (**Exclude** is picked for you).
 - **Sort** puts mods that others depend on first, then follows common load-order
   rules.
 - **DLC…** chooses which DLC the playset loads.

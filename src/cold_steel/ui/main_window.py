@@ -123,7 +123,7 @@ from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.full_text import line_count, show_full_text
 from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
-from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership, ModFilter, ModTableModel
+from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column, ModFilter, ModTableModel
 from cold_steel.ui.pins_dialog import PinsDialog
 from cold_steel.ui.settings_dialog import SettingsDialog
 from cold_steel.ui.tasks import Task, TaskRunner
@@ -348,13 +348,15 @@ class MainWindow(QMainWindow):
         self.tag_box.currentIndexChanged.connect(
             lambda: self.filter.set_tag(self.tag_box.currentData() or "")
         )
+        self.include_box = QComboBox()
+        self.include_box.addItem("Include", False)  # data: exclude
+        self.include_box.addItem("Exclude", True)
+        self.include_box.setToolTip("Show only the mods in the chosen playset, or hide them")
+        self.include_box.currentIndexChanged.connect(self._membership_chosen)
+        self._playset_filtered = False  # the playset filter names a real playset
         self.membership_box = QComboBox()
-        self.membership_box.addItem("In any playset or none", Membership.ANY)
-        self.membership_box.addItem("In a playset", Membership.IN_A_PLAYSET)
-        self.membership_box.addItem("In no playset", Membership.IN_NO_PLAYSET)
-        self.membership_box.currentIndexChanged.connect(
-            lambda: self.filter.set_membership(self.membership_box.currentData())
-        )
+        self._fill_membership()
+        self.membership_box.currentIndexChanged.connect(self._membership_chosen)
         self.outdated_box = QCheckBox("Outdated only")
         self.outdated_box.toggled.connect(self.filter.set_outdated_only)
         self.problems_box = QCheckBox("Problems only")
@@ -364,6 +366,7 @@ class MainWindow(QMainWindow):
         filters = QHBoxLayout()
         filters.addWidget(self.search, 1)
         filters.addWidget(self.tag_box)
+        filters.addWidget(self.include_box)
         filters.addWidget(self.membership_box)
         filters.addWidget(self.outdated_box)
         filters.addWidget(self.problems_box)
@@ -766,6 +769,38 @@ class MainWindow(QMainWindow):
         self.playset_list.blockSignals(False)
         self.playset_list.setCurrentRow(selected)
         self._playset_selected(selected)
+        self._fill_membership()
+
+    def _fill_membership(self) -> None:
+        """The playset filter: All, No playset, then every playset."""
+        box = self.membership_box
+        current = box.currentData()
+        box.blockSignals(True)
+        box.clear()
+        box.addItem("All", ALL)
+        box.addItem("No playset", NO_PLAYSET)
+        playsets = self.book.playsets if self.book else ()
+        if playsets:
+            box.insertSeparator(box.count())
+        for playset in playsets:
+            box.addItem(playset.name, playset.id)
+        box.setCurrentIndex(max(0, box.findData(current)))
+        box.blockSignals(False)
+        self._membership_chosen()
+
+    def _membership_chosen(self) -> None:
+        playset_id = self.membership_box.currentData() or ALL
+        # Exclude only makes sense for a real playset.
+        real = playset_id not in (ALL, NO_PLAYSET)
+        if real != self._playset_filtered:
+            # Coming from All or No playset, a playset starts on Exclude, the usual
+            # choice. Moving between playsets keeps whatever was picked.
+            self.include_box.blockSignals(True)
+            self.include_box.setCurrentIndex(1 if real else 0)  # Exclude, or Include
+            self.include_box.blockSignals(False)
+        self._playset_filtered = real
+        self.include_box.setEnabled(real)
+        self.filter.set_membership(playset_id, bool(self.include_box.currentData()))
 
     @staticmethod
     def _playset_label(playset: Playset) -> str:
@@ -864,6 +899,7 @@ class MainWindow(QMainWindow):
             item.setText(self._playset_label(playset))
         if self.book:
             self.filter.set_playsets(self.book.playsets)
+            self._fill_membership()  # a rename changes its name there
 
     def _reload_playsets(self, select: str | None = None) -> None:
         """After adding or removing playsets: rebuild the list and the missing mods."""

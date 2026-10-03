@@ -279,10 +279,9 @@ def _counts(issues: Health) -> tuple[int, int]:
     return errors, len(issues) - errors
 
 
-class Membership(IntEnum):
-    ANY = 0
-    IN_A_PLAYSET = 1
-    IN_NO_PLAYSET = 2
+# Stand-ins for a playset id in the playset filter.
+ALL = ""  # no filter
+NO_PLAYSET = "<none>"  # the mods in no playset; never a real id
 
 
 class ModFilter(QSortFilterProxyModel):
@@ -305,14 +304,17 @@ class ModFilter(QSortFilterProxyModel):
         self._tag = ""
         self._outdated_only = False
         self._problems_only = False
-        self._membership = Membership.ANY
+        self._member_of = ALL  # a playset id, ALL or NO_PLAYSET
+        self._exclude = False  # hide those mods instead of showing only them
         self._playset: frozenset[str] | None = None  # None: the full list
         self._in_any_playset: frozenset[str] = frozenset()
+        self._by_playset: dict[str, frozenset[str]] = {}
 
     def set_playsets(self, playsets: Sequence[Playset]) -> None:
         """Every playset, for the "in a playset" filters."""
         self.beginFilterChange()
         self._in_any_playset = frozenset(e.key for p in playsets for e in p.entries)
+        self._by_playset = {p.id: frozenset(e.key for e in p.entries) for p in playsets}
         self.endFilterChange()
 
     @override
@@ -357,9 +359,11 @@ class ModFilter(QSortFilterProxyModel):
         self._problems_only = on
         self.endFilterChange()
 
-    def set_membership(self, membership: Membership) -> None:
+    def set_membership(self, playset_id: str, exclude: bool) -> None:
+        """Show only, or hide, the mods in a playset. `playset_id` can be ALL or NO_PLAYSET."""
         self.beginFilterChange()
-        self._membership = membership
+        self._member_of = playset_id
+        self._exclude = exclude
         self.endFilterChange()
 
     def set_playset(self, playset: Playset | None) -> None:
@@ -383,8 +387,10 @@ class ModFilter(QSortFilterProxyModel):
             return False
         if self._problems_only and self._model.health_status(mod) in ("ok", None):
             return False
-        if self._membership == Membership.IN_A_PLAYSET:
-            return mod.key in self._in_any_playset
-        if self._membership == Membership.IN_NO_PLAYSET:
-            return mod.key not in self._in_any_playset
-        return True
+        if self._member_of == ALL:
+            return True
+        if self._member_of == NO_PLAYSET:
+            inside = mod.key not in self._in_any_playset
+        else:
+            inside = mod.key in self._by_playset.get(self._member_of, frozenset())
+        return inside != self._exclude
