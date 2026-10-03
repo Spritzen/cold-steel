@@ -12,7 +12,7 @@ from cold_steel.store.settings import Settings
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
-from cold_steel.ui.mod_table import MOD_ROLE, Column, Membership
+from cold_steel.ui.mod_table import MOD_ROLE, NO_PLAYSET, Column
 from conftest import SampleInstall
 
 
@@ -96,7 +96,37 @@ def test_search_and_filters(window: MainWindow) -> None:
     assert shown(window) == ["Gamma Soundtrack"]
     window.tag_box.setCurrentIndex(0)
 
-    window.membership_box.setCurrentIndex(window.membership_box.findData(Membership.IN_NO_PLAYSET))
+    window.membership_box.setCurrentIndex(window.membership_box.findData(NO_PLAYSET))
+    assert shown(window) == ["Beta Ships", "broken"]
+
+
+def test_include_or_exclude_a_playset(window: MainWindow) -> None:
+    include, playsets = window.include_box, window.membership_box
+    assert not include.isEnabled()  # "All" filters nothing
+    playsets.setCurrentIndex(playsets.findText("Main Playset"))
+    assert include.isEnabled()
+    assert include.currentText() == "Exclude"  # the usual choice
+    assert shown(window) == ["Beta Ships", "broken"]
+    include.setCurrentIndex(include.findText("Include"))
+    assert shown(window) == ["Alpha Interface", "Gamma Soundtrack", "My Local Tweaks"]
+    # Moving to another playset keeps Include.
+    playsets.setCurrentIndex(playsets.findText("Second Playset"))
+    assert include.currentText() == "Include"
+
+    # No playset can only be included: choosing it resets Exclude.
+    playsets.setCurrentIndex(playsets.findData(NO_PLAYSET))
+    assert not include.isEnabled()
+    assert include.currentText() == "Include"
+    assert shown(window) == ["Beta Ships", "broken"]
+
+    # Renaming a playset keeps it chosen, under its new name.
+    playsets.setCurrentIndex(playsets.findText("Main Playset"))
+    assert include.currentText() == "Exclude"
+    assert window.book is not None
+    window.playset_list.setCurrentRow(1)
+    window._playset_changed(window.book.rename(playsets.currentData(), "Renamed"))
+    assert playsets.currentText() == "Renamed"
+    window.playset_list.setCurrentRow(0)
     assert shown(window) == ["Beta Ships", "broken"]
 
 
