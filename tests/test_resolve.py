@@ -5,12 +5,14 @@ the patch in the playset. The Phase 4 winner rules must then pick the patch's
 version of every object the user chose for.
 """
 
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from cold_steel.core.conflicts import FILE, Conflict, ConflictFinder, Found
+from cold_steel.core.deploy import withdraw
 from cold_steel.core.index import GAME, Index
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
@@ -19,6 +21,7 @@ from cold_steel.core.patch import (
     PatchError,
     check_own,
     patch_key,
+    patch_keys,
     plan_patch,
     remove_patch,
     winning_name,
@@ -323,6 +326,46 @@ def test_something_in_the_way_is_never_replaced(
     with pytest.raises(PatchError, match="in the way"):
         write_patch(plan, PLAYSET, library.game, tmp_path / "patches")
     assert not (tmp_path / "patches").exists()
+
+
+def test_the_patchs_workshop_copy_is_still_the_patch(
+    sample_install: SampleInstall, tmp_path: Path
+) -> None:
+    """Uploaded and played from the Workshop, the patch must not count as
+    another mod: a rebuild would then leave choices out, or lose to it."""
+    write(sample_install, CLASHES)
+    library, idx, found = find(sample_install)
+    choices = book(tmp_path)
+    tech = conflict(found, "common/technology", "tech_x")
+    choices.choose(tech, tech.claims[0], idx)
+    root = tmp_path / "patches"
+    first = plan_patch(found, choices.resolutions, idx)
+    folder = write_patch(first, PLAYSET, library.game, root)
+
+    # The launcher uploads it and saves the id; the user plays the Workshop copy.
+    uploaded = "workshop:3000000001"
+    with (folder / "descriptor.mod").open("a") as descriptor:
+        descriptor.write('remote_file_id="3000000001"\n')
+    shutil.copytree(folder, sample_install.workshop_dir / "3000000001")
+    withdraw(library.game, f"{PATCH_PREFIX}p")
+    playset = Playset(id="p", name="Test", entries=(*PLAYSET.entries, PlaysetEntry(uploaded)))
+
+    library = scan(sample_install)
+    keys = patch_keys("p", root, library.game)
+    assert keys == {PATCH, uploaded}
+    idx = index(sample_install, library)
+    found = ConflictFinder(idx, playset, library, leave_out=keys)(JobContext())
+    again = plan_patch(found, choices.resolutions, idx)
+    assert again.files == first.files and again.left_out == ()
+    # The local copy still goes last, beside the Workshop one; the user picks which plays.
+    assert [e.key for e in with_patch_last(playset).entries][-2:] == [uploaded, PATCH]
+
+    # A rebuild keeps the id, so the launcher still updates the Workshop copy.
+    write_patch(again, playset, library.game, root)
+    assert 'remote_file_id="3000000001"' in (folder / "descriptor.mod").read_text()
+    assert (
+        'remote_file_id="3000000001"' in (library.game.mod_dir / f"{PATCH_PREFIX}p.mod").read_text()
+    )
 
 
 def test_the_patch_goes_last_and_only_once() -> None:
