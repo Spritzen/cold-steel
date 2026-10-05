@@ -95,6 +95,9 @@ left to see its mods. Then you can:
   say yes, its `.mod` file and folder go to the trash. If the folder is a link,
   only the link goes. A folder outside the mod folder is left alone. The mod
   is also taken out of every playset that had it.
+- **Your own mods**: a local mod you've uploaded to the Workshop shows as
+  **Local (dev copy)** under **Source**, and the Workshop copy as **Workshop
+  (your release)**. Both stay listed, so a playset can use either one.
 
 The buttons under the list make, copy, rename and delete playsets. The
 playset you last played is in bold.
@@ -128,6 +131,10 @@ For each clash you can **use** either version, **keep the winner**, or
 Then press **Generate patch mod**. Cold Steel writes your choices into a small
 mod that loads last, so the game uses them. If a mod later changes something
 you chose for, Cold Steel asks you to look at it again.
+
+You can upload the patch mod to the Workshop and play that copy. Generating
+the patch again still works, and keeps the Workshop id so the launcher can
+update your upload.
 
 ### Pin mod versions
 

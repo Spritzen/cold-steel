@@ -3,7 +3,7 @@
 # Every dependency is an official Arch package. There is no pip step.
 
 pkgname=cold-steel
-pkgver=0.6.0
+pkgver=0.7.0
 pkgrel=1
 pkgdesc="A native Linux mod manager for Stellaris"
 arch=('any')
