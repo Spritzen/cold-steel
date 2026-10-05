@@ -233,7 +233,9 @@ class ModTableModel(QAbstractTableModel):
             case Column.SOURCE:
                 if not mod.installed:
                     return "Not installed"
-                return "Workshop" if mod.source == "workshop" else "Local"
+                if mod.source == "workshop":
+                    return "Workshop (your release)" if self._dev_copies(mod) else "Workshop"
+                return "Local (dev copy)" if self._release(mod) else "Local"
 
     def _health_text(self, mod: Mod, *, sort: bool) -> Any:
         if self._health is None:
@@ -269,9 +271,24 @@ class ModTableModel(QAbstractTableModel):
                 lines.append("In this playset, but not installed. Unsubscribed, or deleted.")
             if position and not position[1]:
                 lines.append("Turned off in this playset.")
+            if release := self._release(mod):
+                lines.append(f"Your dev copy. Its Workshop release is {self._name(release)}.")
+            if copies := self._dev_copies(mod):
+                names = ", ".join(self._name(k) for k in copies)
+                lines.append(f"Your Workshop release. Its dev copy is the local mod {names}.")
             lines.append(mod.root or mod.archive or mod.key)
             return "\n".join(lines)
         return None
+
+    def _release(self, mod: Mod) -> str | None:
+        return self._library.release_of(mod) if self._library else None
+
+    def _dev_copies(self, mod: Mod) -> list[str]:
+        return self._library.dev_copies_of(mod) if self._library else []
+
+    def _name(self, key: str) -> str:
+        found = next((m for m in self._mods if m.key == key), None)
+        return f"\u201c{found.name}\u201d" if found else key
 
 
 def _counts(issues: Health) -> tuple[int, int]:
