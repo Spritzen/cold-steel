@@ -14,6 +14,7 @@ work pays.
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 
 import msgspec
@@ -83,6 +84,24 @@ class Library:
         if mod.key not in self._outdated:
             self._outdated[mod.key] = is_outdated(mod.supported_version, self.game.version)
         return self._outdated[mod.key]
+
+    @cached_property
+    def releases(self) -> dict[str, str]:
+        """Each local mod that's also installed from the Workshop: local Mod.key ->
+        the Workshop copy's. The local one is the author's dev copy, the Workshop
+        one its release. The launcher saves the Workshop id in the local mod's
+        descriptor when it uploads it."""
+        installed = {m.key for m in self.mods}
+        pairs = ((m.key, f"workshop:{m.remote_file_id}") for m in self.mods if m.source == "local")
+        return {local: release for local, release in pairs if release in installed}
+
+    def release_of(self, mod: Mod) -> str | None:
+        """The Mod.key of a dev copy's Workshop release, or None."""
+        return self.releases.get(mod.key)
+
+    def dev_copies_of(self, mod: Mod) -> list[str]:
+        """The Mod.keys of a Workshop mod's local dev copies, if it's the user's own."""
+        return [local for local, w in self.releases.items() if w == mod.key]
 
 
 @dataclass

@@ -138,6 +138,30 @@ def test_include_or_exclude_a_playset(window: MainWindow) -> None:
     assert playsets.currentData() == ALL
 
 
+def test_a_dev_copy_and_its_release_are_marked(
+    window: MainWindow, sample_install: SampleInstall, qtbot: QtBot
+) -> None:
+    outer = sample_install.root / "home/.local/share/Paradox Interactive/Stellaris/mod/my_local.mod"
+    with outer.open("a") as file:
+        file.write('remote_file_id="2000000002"\n')
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.rescan()
+
+    rows = {window.filter.index(r, Column.NAME).data(): r for r in range(window.filter.rowCount())}
+    local = window.filter.index(rows["My Local Tweaks"], Column.NAME)
+    release = window.filter.index(rows["Beta Ships"], Column.NAME)
+    alpha = window.filter.index(rows["Alpha Interface"], Column.NAME)
+    assert local.siblingAtColumn(Column.SOURCE).data() == "Local (dev copy)"
+    assert release.siblingAtColumn(Column.SOURCE).data() == "Workshop (your release)"
+    assert alpha.siblingAtColumn(Column.SOURCE).data() == "Workshop"
+    assert "Its Workshop release is \u201cBeta Ships\u201d." in local.data(
+        Qt.ItemDataRole.ToolTipRole
+    )
+    assert "Its dev copy is the local mod \u201cMy Local Tweaks\u201d." in release.data(
+        Qt.ItemDataRole.ToolTipRole
+    )
+
+
 def test_outdated_mods_are_shown_in_red(window: MainWindow) -> None:
     from PySide6.QtCore import Qt
 

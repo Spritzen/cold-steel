@@ -72,6 +72,25 @@ def test_outdated_mods_are_marked(sample_install: SampleInstall) -> None:
     assert outdated == {"Beta Ships", "My Local Tweaks"}
 
 
+def test_a_local_mod_and_its_workshop_release_are_paired(sample_install: SampleInstall) -> None:
+    mod_dir = sample_install.root / "home/.local/share/Paradox Interactive/Stellaris/mod"
+    # The launcher saves the Workshop id in a mod it uploads.
+    with (mod_dir / "my_local.mod").open("a") as outer:
+        outer.write('remote_file_id="2000000002"\n')
+    # One that names a mod that isn't installed has no release here.
+    (mod_dir / "gone.mod").write_text(
+        f'name="Gone"\npath="{mod_dir / "my_local"}"\nremote_file_id="2999999999"\n'
+    )
+    library = scan(sample_install)
+
+    assert library.releases == {"local:my_local": "workshop:2000000002"}
+    by_key = {m.key: m for m in library.mods}
+    assert library.release_of(by_key["local:my_local"]) == "workshop:2000000002"
+    assert library.dev_copies_of(by_key["workshop:2000000002"]) == ["local:my_local"]
+    assert library.release_of(by_key["local:gone"]) is None
+    assert library.dev_copies_of(by_key["workshop:2000000001"]) == []
+
+
 def test_launcher_playsets_link_to_mods_in_load_order(sample_install: SampleInstall) -> None:
     library = scan(sample_install)
 
