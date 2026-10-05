@@ -83,7 +83,7 @@ from cold_steel.core.old_copies import OldCopy, describe, find_old_copies
 from cold_steel.core.patch import (
     PatchError,
     PatchPlan,
-    patch_key,
+    patch_keys,
     patches_dir,
     plan_patch,
     remove_patch,
@@ -1407,7 +1407,7 @@ class MainWindow(QMainWindow):
         """A job finding the playset's conflicts and old copies, leaving out its patch mod
         so the clashes it settles still show."""
         cache, previous = self._index_cache, self._index
-        leave_out = frozenset({patch_key(playset.id)})
+        leave_out = patch_keys(playset.id, self._patch_dir, library.game)
         played = as_played(playset)
         versions = {GAME: library.game.version} | {
             m.key: m.supported_version for m in library.every_mod
@@ -1487,7 +1487,7 @@ class MainWindow(QMainWindow):
         choices = self.choices_for(playset)
         resolutions = choices.resolutions  # a snapshot; the job runs on another thread
         cache, previous, root = self._index_cache, self._index, self._patch_dir
-        leave_out = frozenset({patch_key(playset.id)})
+        leave_out = patch_keys(playset.id, root, library.game)
 
         played = as_played(playset)
 

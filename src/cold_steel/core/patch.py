@@ -16,6 +16,12 @@ the winner rules in merge_rules.py:
 
 The patch lives in our data folder. The game's mod folder gets a link to it
 and a .mod file, so a rebuild is live at once.
+
+The user may upload the patch to the Workshop and play that copy instead. The
+launcher then saves its Workshop id in the patch's descriptor. That copy is
+the patch too: it's left out of the conflicts the patch is made from, and a
+rebuild keeps the id. Both copies stay listed, so the user picks which one a
+playset plays.
 """
 
 import re
@@ -32,10 +38,11 @@ from cold_steel.core.definitions import read_definitions
 from cold_steel.core.deploy import deploy, in_the_way, withdraw
 from cold_steel.core.health import BOM, SCRIPT_SUFFIXES, Issue, check_localisation, check_script
 from cold_steel.core.index import Index
+from cold_steel.core.mods import DESCRIPTOR
 from cold_steel.core.resolve import choices_digest, chosen_claim, is_current
-from cold_steel.paradox.descriptor import Descriptor, format_descriptor
+from cold_steel.paradox.descriptor import Descriptor, decode_descriptor, format_descriptor
 from cold_steel.paradox.game import Game
-from cold_steel.paradox.script import scan
+from cold_steel.paradox.script import ParseError, scan
 from cold_steel.store import paths
 from cold_steel.store.playsets import Playset, PlaysetEntry
 from cold_steel.store.resolutions import Resolution
@@ -52,6 +59,27 @@ class PatchError(Exception):
 def patch_key(playset_id: str) -> str:
     """The patch mod's Mod.key, once a scan has found it."""
     return f"local:{PATCH_PREFIX}{playset_id}"
+
+
+def uploaded_id(playset_id: str, root: Path, game: Game) -> str:
+    """The Workshop id the launcher saved when the patch was uploaded, or "".
+    It's in the patch's descriptor.mod, or in its mod/*.mod file."""
+    name = f"{PATCH_PREFIX}{playset_id}"
+    for path in (root / playset_id / DESCRIPTOR, game.mod_dir / f"{name}.mod"):
+        try:
+            remote = decode_descriptor(path.read_bytes()).remote_file_id
+        except OSError, ParseError:
+            continue
+        if remote.isdigit():
+            return remote
+    return ""
+
+
+def patch_keys(playset_id: str, root: Path, game: Game) -> frozenset[str]:
+    """Every Mod.key the patch mod goes by: the local one, and its Workshop
+    copy's once it's uploaded. Leave all of them out when making the patch."""
+    remote = uploaded_id(playset_id, root, game)
+    return frozenset({patch_key(playset_id)} | ({f"workshop:{remote}"} if remote else set()))
 
 
 def patch_name(playset: Playset) -> str:
@@ -305,7 +333,11 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
         raise PatchError(why)
 
     descriptor = Descriptor(
-        name=patch_name(playset), version="1", supported_version=supported_version(game.version)
+        name=patch_name(playset),
+        version="1",
+        supported_version=supported_version(game.version),
+        # Kept, so the launcher still updates the Workshop copy.
+        remote_file_id=uploaded_id(playset.id, root, game),
     )
     new = root / f".{playset.id}.new"
     old = root / f".{playset.id}.old"
