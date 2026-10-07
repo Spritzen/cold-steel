@@ -21,3 +21,4 @@ dist/
 .devcontainer/
 docs/
 CLAUDE.md
+.claude/
