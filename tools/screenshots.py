@@ -1,12 +1,15 @@
 """Takes the README's screenshots from your real install, light and dark.
 
     make screenshots
+    make screenshots PLAYSET="Cold Steel Mix"
 
-Run it on the host for the desktop's own style; in the container it draws
-off screen with Qt's plain style. Your playsets are read from a copy, so
-nothing of yours is changed. Pictures go in screenshots/.
+It shows the playset you last played, or the one PLAYSET names. Run it on
+the host for the desktop's own style; in the container it draws off screen
+with Qt's plain style. Your playsets are read from a copy, so nothing of
+yours is changed. Pictures go in screenshots/.
 """
 
+import argparse
 import shutil
 import sys
 import tempfile
@@ -27,12 +30,15 @@ OUT = Path(__file__).parent.parent / "screenshots"
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Take the README's screenshots.")
+    parser.add_argument("--playset", default="", help="the playset to show, by name")
+    wanted = parser.parse_args().playset
     OUT.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="cold-steel-shots-"))
     if (mine := paths.data_dir() / "playsets.json").exists():
         shutil.copy(mine, scratch / "playsets.json")
 
-    app = QApplication(sys.argv)
+    app = QApplication(sys.argv[:1])
     app.setApplicationName("Cold Steel")
     settings = load_settings()
     window = MainWindow(
@@ -47,10 +53,14 @@ def main() -> int:
         widget.grab().save(str(OUT / f"{name}.png"))
         print(OUT / f"{name}.png")
 
-    def select_active_playset() -> None:
-        active = window.book.active if window.book else None
+    def select_playset() -> None:
+        book = window.book
+        named = [p.id for p in book.playsets if p.name == wanted] if book and wanted else []
+        if wanted and not named:
+            print(f"No playset is called {wanted!r}. Showing the one you last played.")
+        choice = named[0] if named else book.active if book else None
         for row in range(window.playset_list.count()):
-            if window.playset_list.item(row).data(Qt.ItemDataRole.UserRole) == active:
+            if window.playset_list.item(row).data(Qt.ItemDataRole.UserRole) == choice:
                 window.playset_list.setCurrentRow(row)
                 return
         window.playset_list.setCurrentRow(min(1, window.playset_list.count() - 1))
@@ -87,7 +97,7 @@ def main() -> int:
         app.quit()
 
     def library_ready() -> None:
-        select_active_playset()
+        select_playset()
         window.conflicts_shown.connect(lambda _: conflicts_ready())
         window.show_conflicts()
 

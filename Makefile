@@ -30,7 +30,7 @@ docs:           ## Check that every link in the docs resolves
 	$(PY) tools/check_links.py
 
 screenshots:    ## Take the README's screenshots from your install (best run on the host)
-	$(PY) tools/screenshots.py
+	$(PY) tools/screenshots.py $(if $(PLAYSET),--playset "$(PLAYSET)")
 
 package:        ## Build the Arch package from the last commit, into build/package/
 	rm -rf build/package
