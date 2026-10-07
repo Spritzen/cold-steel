@@ -136,6 +136,10 @@ You can upload the patch mod to the Workshop and play that copy. Generating
 the patch again still works, and keeps the Workshop id so the launcher can
 update your upload.
 
+The patch mod's thumbnail is the Cold Steel icon with a green sword, and it's
+tagged **Fixes** (plus **Graphics** when it changes graphics), so it's ready
+to upload as it is.
+
 ### Pin mod versions
 
 A Steam update can change a mod halfway through a campaign. **Pins…** saves
