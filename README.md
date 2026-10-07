@@ -7,10 +7,7 @@ fast window. It shows which mods are broken and where mods clash, helps you
 fix the clashes, and starts the game. It's built for the native Linux version
 of the game, so there's no Wine or Proton involved.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/main-dark.png">
-  <img alt="The main window: playsets on the left, the mods in the chosen playset on the right" src="screenshots/main-light.png">
-</picture>
+![The main window: playsets on the left, the mods in the chosen playset on the right](screenshots/main-dark.png)
 
 ## Install
 
@@ -121,10 +118,7 @@ a technology, an event, a line of text, or a whole file. It says which mod
 wins and why, and shows the versions side by side with the differences
 highlighted.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/conflicts-dark.png">
-  <img alt="The Conflicts window: the list of clashes, and two versions side by side" src="screenshots/conflicts-light.png">
-</picture>
+![The Conflicts window: the list of clashes, and two versions side by side](screenshots/conflicts-dark.png)
 
 For each clash you can **use** either version, **keep the winner**, or
 **write your own**. You can also **ignore** clashes you don't care about.
@@ -180,10 +174,7 @@ authors' work, so don't upload it.
 the theme. By default Cold Steel follows your desktop's light or dark theme.
 It also shows where Cold Steel keeps its own files.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/settings-dark.png">
-  <img alt="The Settings window" src="screenshots/settings-light.png">
-</picture>
+![The Settings window](screenshots/settings-dark.png)
 
 ### Keyboard shortcuts
 
