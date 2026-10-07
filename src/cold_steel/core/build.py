@@ -26,7 +26,6 @@ changed. The build holds other authors' work, so it's for personal use only
 
 import contextlib
 import os
-import re
 import shutil
 import zipfile
 from collections.abc import Iterable, Sequence
@@ -39,7 +38,15 @@ from types import TracebackType
 import msgspec
 
 from cold_steel.core.conflicts import FILE, ConflictFinder, Found, rank
-from cold_steel.core.deploy import clone_file, deploy, in_the_way, link_or_clone, withdraw
+from cold_steel.core.deploy import (
+    clone_file,
+    deploy,
+    in_the_way,
+    link_or_clone,
+    made_from,
+    withdraw,
+)
+from cold_steel.core.deploy import not_ours as _not_ours
 from cold_steel.core.index import GAME, Index, Indexer, LayerIndex, Source
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
@@ -55,7 +62,6 @@ from cold_steel.store.playsets import Playset
 BUILD_PREFIX = "cold_steel_build_"
 BUILD_VERSION = 1
 BUILT = "build"  # the built mod's layer, in check_build
-_PLAIN_ID = re.compile(r"[A-Za-z0-9_-]+")  # uuid4s, as playsets.new_id() makes
 
 
 class BuildError(Exception):
@@ -116,9 +122,7 @@ def build_key(playset_id: str) -> str:
 def built_from(key: str) -> str | None:
     """The playset id a built mod was built from, or None if `key` isn't a build's.
     Ids are plain names, never paths: a mod called `cold_steel_build_..` isn't ours."""
-    prefix = build_key("")
-    playset_id = key.removeprefix(prefix)
-    return playset_id if key.startswith(prefix) and _PLAIN_ID.fullmatch(playset_id) else None
+    return made_from(key, BUILD_PREFIX)
 
 
 def load_record(root: Path, playset_id: str) -> BuildRecord | None:
@@ -386,10 +390,7 @@ class Builder:
 def not_ours(playset_id: str, root: Path, game: Game) -> str | None:
     """Why the mod folder's `cold_steel_build_<id>` isn't a build of ours, or
     None if it is (or if nothing is there). Check before remove_build()."""
-    link = game.mod_dir / f"{BUILD_PREFIX}{playset_id}"
-    if link.is_symlink() and link.readlink() != root / playset_id:
-        return f"{link} links somewhere Cold Steel didn't put it, so it isn't ours to delete."
-    return in_the_way(game, link.name)
+    return _not_ours(game, f"{BUILD_PREFIX}{playset_id}", root / playset_id)
 
 
 def remove_build(playset_id: str, root: Path, game: Game | None) -> None:

@@ -140,6 +140,10 @@ The patch mod's thumbnail is the Cold Steel icon with a green sword, and it's
 tagged **Fixes** (plus **Graphics** when it changes graphics), so it's ready
 to upload as it is.
 
+To delete the patch mod, right-click it in the mod list and choose **Delete
+patch mod…**, or use **Playset › Delete patch mod…**. It's taken out of every
+playset that has it. Your choices stay, so you can generate it again.
+
 ### Pin mod versions
 
 A Steam update can change a mod halfway through a campaign. **Pins…** saves

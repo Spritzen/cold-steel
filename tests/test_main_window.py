@@ -791,6 +791,52 @@ def test_choose_a_winner_and_generate_the_patch(
     assert "up to date with your 1 choice" in conflicts.patch_label.text()
 
 
+def test_delete_the_patch_mod(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(clashing, "tell", lambda title, text: None)
+    conflicts = open_conflicts(qtbot, clashing)
+    select(conflicts, "tech_x")
+    conflicts.use_left.click()
+    with (
+        qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.patch_generated, timeout=20_000),
+    ):
+        conflicts.generate_button.click()
+    playset = clashing.selected_playset()
+    assert playset is not None
+    folder = clashing._patch_dir / playset.id
+    assert folder.is_dir() and clashing.delete_patch_action.isEnabled()
+
+    asked: list[str] = []
+    answer = False
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return answer
+
+    monkeypatch.setattr(clashing, "confirm", confirm)
+    # Saying no deletes nothing.
+    clashing.delete_patch_action.trigger()
+    assert "Main Playset" in asked[0] and folder.is_dir()
+
+    answer = True
+    with qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000):
+        clashing.delete_patch_action.trigger()
+
+    # The patch, its link and its place in the playset are gone. The choice stays.
+    assert clashing.book is not None and clashing.library is not None
+    assert not folder.exists()
+    assert not (clashing.library.game.mod_dir / f"cold_steel_patch_{playset.id}").exists()
+    playset = clashing.selected_playset()
+    assert playset is not None
+    assert not any(e.key.startswith("local:cold_steel_patch_") for e in playset.entries)
+    assert not any(m.key.startswith("local:cold_steel_patch_") for m in clashing.library.mods)
+    assert groups(conflicts)["Technology (1)"] == [("tech_x", "✓ My Local Tweaks")]
+    assert "not in the game yet" in conflicts.patch_label.text()
+    assert not clashing.delete_patch_action.isEnabled()
+
+
 def test_ignore_a_conflict_a_type_or_a_mod(qtbot: QtBot, clashing: MainWindow) -> None:
     conflicts = open_conflicts(qtbot, clashing)
     select(conflicts, "tech_x")
