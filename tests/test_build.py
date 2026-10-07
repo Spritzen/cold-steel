@@ -111,8 +111,8 @@ def test_the_build_is_linked_into_the_mod_folder(
     library = scan(sample_install)
     built = next(m for m in library.mods if m.key == build_key("p"))
     assert built.name == "Cold Steel build: Test"
-    # Every tag of the mods it's built from, in load order.
-    assert built.tags == ("Graphics", "Interface", "Spaceships", "Balance")
+    # Every tag of the mods it's built from, in load order. Fixes is the patch's.
+    assert built.tags == ("Graphics", "Interface", "Spaceships", "Balance", "Fixes")
     assert built.picture == str(link / "thumbnail.png")
 
     remove_build("p", tmp_path / "builds", library.game)

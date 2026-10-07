@@ -22,6 +22,8 @@ from cold_steel.core.patch import (
     check_own,
     patch_key,
     patch_keys,
+    patch_tags,
+    patch_thumbnail,
     plan_patch,
     remove_patch,
     winning_name,
@@ -30,6 +32,7 @@ from cold_steel.core.patch import (
 )
 from cold_steel.core.play import plan_play
 from cold_steel.core.resolve import CHOSEN, NONE, STALE, ResolutionBook, copy_resolutions
+from cold_steel.paradox.descriptor import parse_descriptor
 from cold_steel.store.playsets import Playset, PlaysetEntry
 from cold_steel.store.resolutions import Ignore, resolutions_file
 from conftest import SampleInstall
@@ -158,6 +161,7 @@ def test_every_choice_in_one_patch(sample_install: SampleInstall, tmp_path: Path
         "gfx/models/thing.txt",
         "interface/zz_cold_steel_GFX_x.gfx",
         "localisation/replace/zz_cold_steel_l_english.yml",
+        "thumbnail.png",
     ]
 
 
@@ -307,14 +311,27 @@ def test_writing_links_the_patch_into_the_mod_folder(
     assert 'name="Cold Steel patch: Test"' in text
     assert f'path="{link}"' in text
     assert 'supported_version="v' in text
+    descriptor = parse_descriptor(text)
+    assert descriptor.tags == ("Fixes",)
+    assert descriptor.picture == "thumbnail.png"
+    assert (folder / "thumbnail.png").read_bytes() == patch_thumbnail()
 
     # A rebuild starts from nothing, so a cleared choice leaves no file behind.
     choices.clear_all()
     write_patch(plan_patch(found, choices.resolutions, idx), PLAYSET, library.game, root)
-    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == ["descriptor.mod"]
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == [
+        "descriptor.mod",
+        "thumbnail.png",
+    ]
 
     remove_patch("p", library.game, root)
     assert not link.is_symlink() and not outer.exists() and not folder.exists()
+
+
+def test_the_patch_is_tagged_graphics_only_when_it_ships_graphics() -> None:
+    assert patch_tags(["common/technology/zz_tech.txt"]) == ("Fixes",)
+    assert patch_tags(["common/a.txt", "GFX/models/ships.gfx"]) == ("Fixes", "Graphics")
+    assert patch_tags(["interface/zz_x.gui"]) == ("Fixes", "Graphics")
 
 
 def test_something_in_the_way_is_never_replaced(

@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Cold Steel's icon, with an emerald sword in place of the silver one:
+       a patch mod we made. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2838"/>
+      <stop offset="1" stop-color="#080c13"/>
+    </linearGradient>
+    <radialGradient id="frost" cx="0.5" cy="0.45" r="0.55">
+      <stop offset="0" stop-color="#7fb8e6" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#7fb8e6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c9d6e4"/>
+      <stop offset="0.5" stop-color="#4a5868"/>
+      <stop offset="1" stop-color="#9fb2c6"/>
+    </linearGradient>
+    <linearGradient id="edgeL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9fbe9"/>
+      <stop offset="0.45" stop-color="#5fe0a0"/>
+      <stop offset="1" stop-color="#1fa866"/>
+    </linearGradient>
+    <linearGradient id="edgeR" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3fbf80"/>
+      <stop offset="0.5" stop-color="#14804f"/>
+      <stop offset="1" stop-color="#0b5535"/>
+    </linearGradient>
+    <linearGradient id="guard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b4f2d2"/>
+      <stop offset="0.5" stop-color="#2a9d66"/>
+      <stop offset="1" stop-color="#0d4a30"/>
+    </linearGradient>
+    <radialGradient id="pommel" cx="0.35" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#e4fdf0"/>
+      <stop offset="1" stop-color="#157a4b"/>
+    </radialGradient>
+    <radialGradient id="glint" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.4" stop-color="#cff8e2" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#7fe0ad" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#frost)"/>
+
+  <!-- stars -->
+  <g fill="#cfe2f5">
+    <circle cx="52" cy="60" r="1.6" opacity="0.8"/>
+    <circle cx="78" cy="38" r="1.1" opacity="0.6"/>
+    <circle cx="196" cy="196" r="1.4" opacity="0.7"/>
+    <circle cx="210" cy="150" r="1" opacity="0.5"/>
+    <circle cx="44" cy="170" r="1.2" opacity="0.5"/>
+    <circle cx="170" cy="216" r="1" opacity="0.6"/>
+    <circle cx="214" cy="92" r="1.2" opacity="0.6"/>
+  </g>
+
+  <!-- sword, drawn upright then turned -->
+  <g transform="rotate(45 128 128)">
+    <!-- shadow -->
+    <g transform="translate(4 4)" opacity="0.45" fill="#000">
+      <polygon points="128,26 143,56 143,168 113,168 113,56"/>
+      <rect x="90" y="166" width="76" height="14" rx="5"/>
+      <rect x="120" y="180" width="16" height="36" rx="3"/>
+      <circle cx="128" cy="224" r="10"/>
+    </g>
+    <!-- blade bevels -->
+    <polygon points="128,26 113,56 113,168 128,168" fill="url(#edgeL)"/>
+    <polygon points="128,26 143,56 143,168 128,168" fill="url(#edgeR)"/>
+    <!-- fuller -->
+    <rect x="126" y="62" width="4" height="98" rx="2" fill="#0a4429" opacity="0.7"/>
+    <line x1="125.5" y1="64" x2="125.5" y2="158" stroke="#ffffff" stroke-width="0.8" opacity="0.6"/>
+    <!-- outline -->
+    <polygon points="128,26 143,56 143,168 113,168 113,56" fill="none" stroke="#0c3322" stroke-width="1.5" stroke-linejoin="round"/>
+    <!-- crossguard -->
+    <path d="M90 173 Q90 166 97 166 L159 166 Q166 166 166 173 Q166 180 159 180 L97 180 Q90 180 90 173 Z" fill="url(#guard)" stroke="#0c3322" stroke-width="1.5"/>
+    <!-- grip -->
+    <rect x="120" y="180" width="16" height="36" rx="3" fill="#1f2a37" stroke="#11171f" stroke-width="1.2"/>
+    <g stroke="#5f7084" stroke-width="2" stroke-linecap="round">
+      <line x1="121" y1="186" x2="135" y2="190"/>
+      <line x1="121" y1="194" x2="135" y2="198"/>
+      <line x1="121" y1="202" x2="135" y2="206"/>
+      <line x1="121" y1="210" x2="135" y2="214"/>
+    </g>
+    <!-- pommel -->
+    <circle cx="128" cy="224" r="10" fill="url(#pommel)" stroke="#0c3322" stroke-width="1.5"/>
+  </g>
+
+  <!-- glint near the tip -->
+  <g transform="translate(178 78)">
+    <circle r="22" fill="url(#glint)"/>
+    <path d="M0 -24 L2.2 -2.2 L24 0 L2.2 2.2 L0 24 L-2.2 2.2 L-24 0 L-2.2 -2.2 Z" fill="#ffffff"/>
+  </g>
+
+  <!-- steel rim -->
+  <rect x="9.5" y="9.5" width="237" height="237" rx="50.5" fill="none" stroke="url(#rim)" stroke-width="3" opacity="0.8"/>
+</svg>

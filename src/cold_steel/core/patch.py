@@ -15,7 +15,8 @@ the winner rules in merge_rules.py:
 - **Localisation:** one file in a replace/ folder, which beats the rest.
 
 The patch lives in our data folder. The game's mod folder gets a link to it
-and a .mod file, so a rebuild is live at once.
+and a .mod file, so a rebuild is live at once. Its thumbnail is Cold Steel's
+icon with the sword in emerald, to tell it apart from the build's.
 
 The user may upload the patch to the Workshop and play that copy instead. The
 launcher then saves its Workshop id in the patch's descriptor. That copy is
@@ -28,6 +29,7 @@ import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 import msgspec
@@ -38,7 +40,7 @@ from cold_steel.core.definitions import read_definitions
 from cold_steel.core.deploy import deploy, in_the_way, withdraw
 from cold_steel.core.health import BOM, SCRIPT_SUFFIXES, Issue, check_localisation, check_script
 from cold_steel.core.index import Index
-from cold_steel.core.mods import DESCRIPTOR
+from cold_steel.core.mods import DESCRIPTOR, FALLBACK_PICTURE
 from cold_steel.core.resolve import choices_digest, chosen_claim, is_current
 from cold_steel.paradox.descriptor import Descriptor, decode_descriptor, format_descriptor
 from cold_steel.paradox.game import Game
@@ -50,6 +52,7 @@ from cold_steel.store.resolutions import Resolution
 PATCH_PREFIX = "cold_steel_patch_"
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _VERSION = re.compile(r"v?(\d+)\.(\d+)")
+_GRAPHICS = ("gfx/", "interface/")
 
 
 class PatchError(Exception):
@@ -336,6 +339,8 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
         name=patch_name(playset),
         version="1",
         supported_version=supported_version(game.version),
+        tags=patch_tags(plan.files),
+        picture=FALLBACK_PICTURE,
         # Kept, so the launcher still updates the Workshop copy.
         remote_file_id=uploaded_id(playset.id, root, game),
     )
@@ -347,6 +352,7 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     new.mkdir(parents=True, exist_ok=True)
+    (new / FALLBACK_PICTURE).write_bytes(patch_thumbnail())
     (new / "descriptor.mod").write_text(format_descriptor(descriptor), "utf-8")
     shutil.rmtree(old, ignore_errors=True)
     if folder.exists():
@@ -355,6 +361,19 @@ def write_patch(plan: PatchPlan, playset: Playset, game: Game, root: Path) -> Pa
     shutil.rmtree(old, ignore_errors=True)
     deploy(folder, name, descriptor, game)
     return folder
+
+
+def patch_tags(files: Iterable[str]) -> tuple[str, ...]:
+    """Fixes, since every patch fixes clashes. Graphics too when the patch
+    ships files under gfx/ or interface/."""
+    graphics = any(path.lower().startswith(_GRAPHICS) for path in files)
+    return ("Fixes", "Graphics") if graphics else ("Fixes",)
+
+
+def patch_thumbnail() -> bytes:
+    """Cold Steel's icon with the sword in emerald.
+    Rendered from data/patch-icon.svg with `rsvg-convert -w 512 -h 512`."""
+    return resources.files("cold_steel").joinpath("data/patch-thumbnail.png").read_bytes()
 
 
 def remove_patch(playset_id: str, game: Game, root: Path) -> None:
