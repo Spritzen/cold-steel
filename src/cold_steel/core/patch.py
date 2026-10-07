@@ -37,7 +37,7 @@ import xxhash
 
 from cold_steel.core.conflicts import FILE, Claim, Conflict, Found
 from cold_steel.core.definitions import read_definitions
-from cold_steel.core.deploy import deploy, in_the_way, withdraw
+from cold_steel.core.deploy import deploy, in_the_way, made_from, not_ours, withdraw
 from cold_steel.core.health import BOM, SCRIPT_SUFFIXES, Issue, check_localisation, check_script
 from cold_steel.core.index import Index
 from cold_steel.core.mods import DESCRIPTOR, FALLBACK_PICTURE
@@ -76,6 +76,11 @@ def uploaded_id(playset_id: str, root: Path, game: Game) -> str:
         if remote.isdigit():
             return remote
     return ""
+
+
+def patched_from(key: str) -> str | None:
+    """The playset id a patch mod was made for, or None if `key` isn't a patch's."""
+    return made_from(key, PATCH_PREFIX)
 
 
 def patch_keys(playset_id: str, root: Path, game: Game) -> frozenset[str]:
@@ -374,6 +379,12 @@ def patch_thumbnail() -> bytes:
     """Cold Steel's icon with the sword in emerald.
     Rendered from data/patch-icon.svg with `rsvg-convert -w 512 -h 512`."""
     return resources.files("cold_steel").joinpath("data/patch-thumbnail.png").read_bytes()
+
+
+def not_our_patch(playset_id: str, root: Path, game: Game) -> str | None:
+    """Why the mod folder's `cold_steel_patch_<id>` isn't a patch of ours, or
+    None if it is (or if nothing is there). Check before remove_patch()."""
+    return not_ours(game, f"{PATCH_PREFIX}{playset_id}", root / playset_id)
 
 
 def remove_patch(playset_id: str, game: Game, root: Path) -> None:

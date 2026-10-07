@@ -83,7 +83,10 @@ from cold_steel.core.old_copies import OldCopy, describe, find_old_copies
 from cold_steel.core.patch import (
     PatchError,
     PatchPlan,
+    not_our_patch,
+    patch_key,
     patch_keys,
+    patched_from,
     patches_dir,
     plan_patch,
     remove_patch,
@@ -298,6 +301,7 @@ class MainWindow(QMainWindow):
         self.build_action = action("&Build one mod", self.build_mod, "Ctrl+B")
         self.report_action = action("Build re&port…", self.show_build_report)
         self.delete_build_action = action("Delete b&uild…", self._delete_selected_build)
+        self.delete_patch_action = action("Delete pa&tch mod…", self._delete_selected_patch)
         self.export_action = action("&Export to launcher", self.export_to_launcher, "Ctrl+Shift+E")
         self.open_launcher_action = action("&Open in launcher", self.open_in_launcher)
         self.save_file_action = action("&Save to file…", self.save_to_file, "Ctrl+S")
@@ -310,6 +314,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.delete_action)
         menu.addSeparator()
         menu.addActions([self.play_action, self.errors_action, self.conflicts_action])
+        menu.addAction(self.delete_patch_action)
         menu.addActions([self.sort_action, self.dlc_action])
         menu.addSeparator()
         menu.addActions([self.pins_action, self.build_action, self.report_action])
@@ -871,6 +876,8 @@ class MainWindow(QMainWindow):
         built = playset is not None and (self._build_dir / f"{playset.id}.json").exists()
         self.report_action.setEnabled(built)
         self.delete_build_action.setEnabled(built)
+        patched = playset is not None and (self._patch_dir / playset.id).is_dir()
+        self.delete_patch_action.setEnabled(patched)
         self.new_action.setEnabled(self.book is not None)
         self.load_file_action.setEnabled(self.book is not None)
         self.sync_action.setEnabled(self.book is not None)
@@ -1058,12 +1065,18 @@ class MainWindow(QMainWindow):
                 menu.addAction("Open in Steam").triggered.connect(
                     lambda: self.open_url(STEAM_WORKSHOP_PAGE + steam_id)
                 )
-        # Only mods Cold Steel built can be deleted from here.
+        # Cold Steel's own mods have their own ways to go.
         built = [b for k in keys if (b := built_from(k))]
         if len(keys) == 1 and built:
             menu.addSeparator()
             menu.addAction("Delete built mod…").triggered.connect(
                 lambda: self.delete_build(built[0])
+            )
+        patched = [p for k in keys if (p := patched_from(k))]
+        if len(keys) == 1 and patched:
+            menu.addSeparator()
+            menu.addAction("Delete patch mod…").triggered.connect(
+                lambda: self.delete_patch(patched[0])
             )
         if len(keys) == 1 and self._local_files(keys[0]) is not None:
             menu.addSeparator()
@@ -1524,6 +1537,50 @@ class MainWindow(QMainWindow):
         # The scan finds the new mod, and refreshes the conflicts.
         self.rescan()
         self.tell("Patch mod", text)
+
+    def _delete_selected_patch(self) -> None:
+        if playset := self.selected_playset():
+            self.delete_patch(playset.id)
+
+    def delete_patch(self, playset_id: str) -> None:
+        """Delete a playset's patch mod, and take it out of every playset that
+        has it. The conflict choices stay, so it can be generated again."""
+        library, book = self.library, self.book
+        if library is None or book is None or patched_from(patch_key(playset_id)) is None:
+            return
+        title = "Delete patch mod"
+        if self._patch_task is not None:
+            self.tell(title, "The patch mod is being written. Try again when it's done.")
+            return
+        if why := not_our_patch(playset_id, self._patch_dir, library.game):
+            self.tell(title, f"The patch mod wasn't deleted: {why}")
+            return
+        key = patch_key(playset_id)
+        source = book.get(playset_id)
+        name = source.name if source else playset_id
+        text = (
+            f"Delete the patch mod for \u201c{name}\u201d? Your conflict choices stay, "
+            "so you can generate it again."
+        )
+        users = [p for p in book.playsets if any(e.key == key for e in p.entries)]
+        if users:
+            names = ", ".join(f"\u201c{p.name}\u201d" for p in users)
+            text += f" It's also taken out of {names}."
+        if not self.confirm(title, text):
+            return
+        remove_patch(playset_id, library.game, self._patch_dir)
+        for playset in users:
+            book.update(ops.remove_mods(playset, [key]))
+        # The choices are no longer in the game, so they count as not generated.
+        path = resolutions_file(playset_id, self._choices_dir)
+        open_now = self._choices
+        choices = open_now if open_now and open_now.path == path else ResolutionBook.open(path)
+        if choices.built:
+            choices.mark_built(0)
+        current = self.selected_playset()
+        self._reload_playsets(current.id if current else "")
+        self.statusBar().showMessage(f"Deleted the patch mod for {name}")
+        self.rescan()  # the patch mod is gone from the mod folder
 
     def _patch_failed(self, error: Exception) -> None:
         if isinstance(error, PatchError | OSError):

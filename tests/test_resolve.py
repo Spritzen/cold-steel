@@ -20,10 +20,12 @@ from cold_steel.core.patch import (
     PATCH_PREFIX,
     PatchError,
     check_own,
+    not_our_patch,
     patch_key,
     patch_keys,
     patch_tags,
     patch_thumbnail,
+    patched_from,
     plan_patch,
     remove_patch,
     winning_name,
@@ -326,6 +328,33 @@ def test_writing_links_the_patch_into_the_mod_folder(
 
     remove_patch("p", library.game, root)
     assert not link.is_symlink() and not outer.exists() and not folder.exists()
+
+
+def test_only_our_patches_can_be_deleted(sample_install: SampleInstall, tmp_path: Path) -> None:
+    assert patched_from(patch_key("p")) == "p"
+    for key in (
+        "local:my_local",
+        "local:cold_steel_patch_",
+        "local:cold_steel_patch_..",
+        "workshop:cold_steel_patch_p",
+        "local:cold_steel_build_p",
+    ):
+        assert patched_from(key) is None, key
+
+    write(sample_install, CLASHES)
+    library, idx, found = find(sample_install)
+    root = tmp_path / "patches"
+    write_patch(plan_patch(found, (), idx), PLAYSET, library.game, root)
+    assert not_our_patch("p", root, library.game) is None
+
+    # A link to somewhere else, or a real folder, under our name isn't ours.
+    link = library.game.mod_dir / f"{PATCH_PREFIX}p"
+    link.unlink()
+    link.symlink_to(tmp_path, target_is_directory=True)
+    assert "didn't put it" in (not_our_patch("p", root, library.game) or "")
+    link.unlink()
+    link.mkdir()
+    assert "isn't ours" in (not_our_patch("p", root, library.game) or "")
 
 
 def test_the_patch_is_tagged_graphics_only_when_it_ships_graphics() -> None:

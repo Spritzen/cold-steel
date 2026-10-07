@@ -13,6 +13,7 @@ import contextlib
 import errno
 import fcntl
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -23,6 +24,14 @@ from cold_steel.paradox.game import Game
 
 # The Linux ioctl that makes `dst` share `src`'s data (a reflink).
 FICLONE = 0x40049409
+_PLAIN_ID = re.compile(r"[A-Za-z0-9_-]+")  # uuid4s, as playsets.new_id() makes
+
+
+def made_from(key: str, prefix: str) -> str | None:
+    """The playset id in a Mod.key of ours, `local:<prefix><id>`, or None.
+    Ids are plain names, never paths: a mod called `<prefix>..` isn't ours."""
+    playset_id = key.removeprefix(f"local:{prefix}")
+    return playset_id if key != playset_id and _PLAIN_ID.fullmatch(playset_id) else None
 
 
 def in_the_way(game: Game, name: str) -> str | None:
@@ -31,6 +40,15 @@ def in_the_way(game: Game, name: str) -> str | None:
     if link.exists() and not link.is_symlink():
         return f"{link} is in the way. It isn't ours, so move it, then try again."
     return None
+
+
+def not_ours(game: Game, name: str, folder: Path) -> str | None:
+    """Why the mod folder's `name` isn't our link to `folder`, or None if it
+    is (or if nothing is there). Check before withdrawing it."""
+    link = game.mod_dir / name
+    if link.is_symlink() and link.readlink() != folder:
+        return f"{link} links somewhere Cold Steel didn't put it, so it isn't ours to delete."
+    return in_the_way(game, name)
 
 
 def deploy(folder: Path, name: str, descriptor: Descriptor, game: Game) -> Path:
