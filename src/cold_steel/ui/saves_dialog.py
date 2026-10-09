@@ -68,7 +68,7 @@ class SavesDialog(QDialog):
     # Unbind these saves (folders). They're not suggested for a playset again.
     unbind_requested = Signal(tuple)
     # Play the playset and open a save (folder), at one of its files (path), or
-    # at its newest when the path is "". A folder of "" means the newest save.
+    # at its newest when the path is "".
     continue_requested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -102,19 +102,12 @@ class SavesDialog(QDialog):
             "Bind each unbound save to the playset whose mods match its newest file"
         )
         self.suggested_button.clicked.connect(self._bind_suggested)
-        self.continue_button = QPushButton("Continue")
-        self.continue_button.setToolTip(
-            "Play this playset and open the selected save at its newest file, "
-            "or the newest save if none is selected"
-        )
-        self.continue_button.clicked.connect(self._continue_selected)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
         buttons = QHBoxLayout()
         buttons.addWidget(self.bind_button)
         buttons.addWidget(self.suggested_button)
         buttons.addStretch()
-        buttons.addWidget(self.continue_button)
         buttons.addWidget(close)
 
         layout = QVBoxLayout(self)
@@ -157,7 +150,6 @@ class SavesDialog(QDialog):
             lambda save: (p.name, "") if (p := self.suggested.get(save.folder)) else ("", ""),
         )
         self.suggested_button.setEnabled(bool(self.suggested))
-        self.continue_button.setEnabled(bool(bound))
         if bound is None:
             self.summary.setText("Looking for saves…")
         elif bound:
@@ -242,10 +234,6 @@ class SavesDialog(QDialog):
         folders = self._folders(self.unbound)
         if self.playset is not None and folders:
             self.bind_requested.emit(folders, self.playset.id)
-
-    def _continue_selected(self) -> None:
-        folders = self._folders(self.bound)
-        self.continue_requested.emit(folders[0] if len(folders) == 1 else "", "")
 
     def _bind_suggested(self) -> None:
         by_playset: dict[str, list[str]] = {}

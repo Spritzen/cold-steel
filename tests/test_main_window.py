@@ -1549,7 +1549,7 @@ def test_continuing_a_save_whose_mods_differ_asks_first(
         return answer
 
     monkeypatch.setattr(window, "confirm", confirm)
-    dialog.continue_button.click()
+    window.continue_action.trigger()
     assert "is marked: Mods differ" in asked[0] and "Removed since: Alpha Interface" in asked[0]
     assert plans == []
 
