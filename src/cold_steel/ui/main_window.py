@@ -257,6 +257,9 @@ class MainWindow(QMainWindow):
         self._build_task: Task | None = None
         self._build_dialog: BuildDialog | None = None
         self._saves_path = saves_path or bindings_file()
+        # Saves, Continue, binding and the rebuild question are on only while the
+        # game keeps its autosaves local (decision 91). Read from settings.txt.
+        self.saves_on = False
         self.bindings: BindingBook | None = None
         # Every save in the save folders, newest first. None until they're read.
         self.saves: tuple[Save, ...] | None = None
@@ -306,6 +309,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_message_page())
         self.setCentralWidget(self.pages)
         self._build_status_bar()
+        self._read_saves_setting()  # off until the game is found
 
         if scan is not None:
             QTimer.singleShot(0, self.rescan)
@@ -608,6 +612,8 @@ class MainWindow(QMainWindow):
         if changed is not None and changed != self.settings:
             self.settings = changed
             self.settings_chosen.emit(changed)
+        if self._read_saves_setting():
+            self._scan_saves()
 
     def show_library(self, library: Library) -> None:
         self.library = library
@@ -646,6 +652,7 @@ class MainWindow(QMainWindow):
         self._check_health(library)
         self._check_pins(library)
         self._check_old_copies()
+        self._read_saves_setting()
         self._scan_saves()
         self.library_shown.emit(library)
 
@@ -1370,7 +1377,7 @@ class MainWindow(QMainWindow):
         """Play the selected playset and open one of its saves at its newest
         file, skipping the game's main menu. By default its newest save."""
         playset, bindings = self.selected_playset(), self.bindings
-        if playset is None or bindings is None:
+        if playset is None or bindings is None or not self.saves_on:
             return
         bound = bound_saves(self.saves or (), bindings, playset.id)
         save = next((s for s in bound if s.folder == folder), None) if folder else None
@@ -1397,7 +1404,8 @@ class MainWindow(QMainWindow):
         playset = self.selected_playset()
         if playset is None or self.book is None or self.library is None:
             return
-        if continue_from is None and self.bindings is not None:
+        self._read_saves_setting()  # read each time Play is pressed
+        if continue_from is None and self.bindings is not None and self.saves_on:
             bound = bound_saves(self.saves or (), self.bindings, playset.id)
             continue_from = _continue_game(bound[0]) if bound else None
         plan = dataclass_replace(
@@ -1436,10 +1444,8 @@ class MainWindow(QMainWindow):
 
     def _hide_plan(self, playset: Playset) -> HidePlan | None:
         """The saves of other playsets to hide from the game, when its autosaves
-        stay local (decision 91). Read from settings.txt each time."""
-        if self.library is None or self.book is None or self.bindings is None:
-            return None
-        if autosaves_to_cloud(self.library.game.data_dir) is not False:
+        stay local (decision 91)."""
+        if self.book is None or self.bindings is None or not self.saves_on:
             return None
         others = self.bindings.bound_elsewhere(playset.id, {p.id for p in self.book.playsets})
         return HidePlan(tuple(sorted(others)), self._hidden_path) if others else None
@@ -1509,6 +1515,7 @@ class MainWindow(QMainWindow):
             if self._restore_waiting and not processes.running(processes.GAME):
                 self._game_timer.stop()
                 self._put_back_saves()
+                self._read_saves_setting()
                 self._scan_saves()
             return
         if self._game.poll() is None:
@@ -1518,7 +1525,8 @@ class MainWindow(QMainWindow):
         self._put_back_saves()
         self.statusBar().showMessage("Stellaris closed. Reading its error log…")
         self._read_errors(show=False)
-        self._bind_played = True
+        self._read_saves_setting()  # it may have been changed in the game
+        self._bind_played = self.saves_on
         self._scan_saves()
 
     # Conflicts
@@ -1881,7 +1889,7 @@ class MainWindow(QMainWindow):
 
     def _scan_saves(self) -> None:
         """Read the save folders, off the main thread. Unchanged files come from the cache."""
-        if self.library is None:
+        if self.library is None or not self.saves_on:
             return
         if self._saves_task is not None:
             self._saves_task.cancel()
@@ -1930,10 +1938,27 @@ class MainWindow(QMainWindow):
         names = ", ".join(s.empire for s in saves if s.folder in new)
         self.statusBar().showMessage(f"New save(s) bound to {playset.name}: {names}")
 
+    def _read_saves_setting(self) -> bool:
+        """Turn the saves features on or off from the game's settings.txt: on
+        only with cloud autosaves off (decision 91). True if they just came on."""
+        data_dir = self.library.game.data_dir if self.library else None
+        on = data_dir is not None and autosaves_to_cloud(data_dir) is False
+        came_on = on and not self.saves_on
+        self.saves_on = on
+        for act in (self.saves_action, self.continue_action):
+            act.setVisible(on)
+        self.saves_button.setVisible(on)
+        self.continue_button.setVisible(on)
+        if not on:
+            self.saves_label.hide()
+            if self._saves_dialog is not None:
+                self._saves_dialog.hide()
+        return came_on
+
     def show_saves(self) -> None:
         """Open the Saves window for the selected playset, and read the saves again."""
         playset = self.selected_playset()
-        if playset is None or self.library is None:
+        if playset is None or self.library is None or not self.saves_on:
             return
         dialog = self._saves_dialog
         if dialog is None:
@@ -1948,6 +1973,9 @@ class MainWindow(QMainWindow):
     def _show_saves(self, playset: Playset | None, *, opening: bool = False) -> None:
         """The Saves button's count, the line above the mod list, and the Saves
         window if it's open."""
+        if not self.saves_on:
+            self.saves_label.hide()
+            return
         saves, bindings, library = self.saves, self.bindings, self.library
         bound = bound_saves(saves or (), bindings, playset.id) if playset and bindings else []
         self.saves_button.setText(f"Saves ({len(bound)})" if bound else "Saves")
@@ -2029,7 +2057,7 @@ class MainWindow(QMainWindow):
 
     def _saves_unbound_text(self, playset: Playset) -> str:
         """For a confirm box: what happens to a playset's saves when it goes."""
-        count = len(self.bindings.saves_of(playset.id)) if self.bindings else 0
+        count = len(self.bindings.saves_of(playset.id)) if self.bindings and self.saves_on else 0
         if not count:
             return ""
         return (
@@ -2117,7 +2145,8 @@ class MainWindow(QMainWindow):
         """The built playset has saves, and they haven't been read yet."""
         built, bindings = self._built_playset(playset), self.bindings
         return (
-            self.saves is None
+            self.saves_on
+            and self.saves is None
             and built is not None
             and bool(bindings and bindings.saves_of(built.id))
         )
@@ -2127,7 +2156,7 @@ class MainWindow(QMainWindow):
         playset (decision 85). Whether to build, and the answer if one was asked."""
         library, bindings = self.library, self.bindings
         built = self._built_playset(playset)
-        if library is None or bindings is None or built is None:
+        if library is None or bindings is None or built is None or not self.saves_on:
             return True, None
         folders = bindings.saves_of(built.id)
         saves = [s for s in self.saves or () if s.folder in folders]
@@ -2314,6 +2343,13 @@ class MainWindow(QMainWindow):
             # Drawn icons take the text colour, so they're drawn again for the new theme.
             for act, name, draw in self._sidebar_icons:
                 act.setIcon(icons.theme_icon(name, draw))
+        elif (
+            event.type() == QEvent.Type.ActivationChange
+            and self.isActiveWindow()
+            # Back from the game or a text editor: cloud autosaves may have been turned off.
+            and self._read_saves_setting()
+        ):
+            self._scan_saves()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         self.tasks.cancel_all()

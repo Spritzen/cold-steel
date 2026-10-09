@@ -21,7 +21,7 @@ ELVES = "divineelvenorder_-1997250795"
         ('language="l_english"\nautosave_tocloud=no\n', False),
         ('autosave=4\nautosave_tocloud="no"\n', False),
         ("autosave_tocloud=yes\n", True),
-        ('language="l_english"\n', True),  # a missing line means the game's default: yes
+        ('language="l_english"\n', False),  # the game leaves the line out when it's off
     ],
 )
 def test_cloud_autosaves_are_read_from_settings(tmp_path: Path, text: str, cloud: bool) -> None:

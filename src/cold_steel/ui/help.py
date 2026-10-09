@@ -32,15 +32,16 @@ changes them, and never downloads or subscribes to mods.</li>
 into its own list. After that the launcher only changes when you press
 <b>Export to launcher</b>, <b>Open in launcher</b> or <b>Sync launcher</b>.</li>
 <li><b>Your saves,</b> in the game's save folder and Steam Cloud's, to show which
-playset each one belongs to.</li>
+playset each one belongs to. Only once you turn off cloud autosaves in the game's
+settings: Cold Steel can't move Steam Cloud's files.</li>
 </ul>
 
 <h3>It changes Paradox's files only when you ask</h3>
 <ul>
 <li><b>Play</b> writes <code>dlc_load.json</code>, which tells the game what to load. For a
 mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.
-It also writes <code>continue_game.json</code>, which names the save the game's
-<i>Continue</i> opens.</li>
+With cloud autosaves off, it also writes <code>continue_game.json</code>, which names
+the save the game's <i>Continue</i> opens.</li>
 <li><b>Play</b> and <b>Continue</b>, with cloud autosaves off, move other playsets' saves to
 <code>cold_steel_hidden_saves</code>, beside <code>save games</code>, while the game runs, so
 its Load menu shows only this playset's. They're moved back when it closes. No file in
