@@ -30,7 +30,7 @@ exactly what it reads and what it changes.</p>
 changes them, and never downloads or subscribes to mods.</li>
 <li><b>Your launcher playsets.</b> The first time it opens, Cold Steel copies them
 into its own list. After that the launcher only changes when you press
-<b>Export to launcher</b> or <b>Sync launcher</b>.</li>
+<b>Export to launcher</b>, <b>Open in launcher</b> or <b>Sync launcher</b>.</li>
 </ul>
 
 <h3>It changes Paradox's files only when you ask</h3>
@@ -42,6 +42,8 @@ launcher's database. <b>File &rsaquo; Sync launcher</b> replaces all its playset
 Cold Steel's.</li>
 <li><b>Generate patch mod</b>, <b>Build</b> and <b>Pins</b> add their own mods to the
 game's <code>mod</code> folder. Their names start with <code>cold_steel_</code>.</li>
+<li><b>Delete local mod</b> moves a local mod's <code>.mod</code> file and folder to the
+trash, after asking. If the folder is a link, only the link goes.</li>
 </ul>
 <p>Every Paradox file is backed up before it changes, and nothing is written while
 the launcher or the game is open.</p>

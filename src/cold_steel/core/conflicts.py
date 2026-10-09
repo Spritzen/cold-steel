@@ -119,7 +119,8 @@ class ConflictFinder:
     playset: Playset
     library: Library
     rules: Rules = field(default_factory=load_rules)
-    # Mods to leave out: the playset's own patch mod, so the clashes it settles still show.
+    # Mods to leave out: the playset's own patch mod (and its Workshop copy) or
+    # build, so the clashes they settle still show.
     leave_out: frozenset[str] = frozenset()
 
     def __call__(self, ctx: JobContext) -> Found:

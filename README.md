@@ -207,6 +207,8 @@ anything. It changes Paradox's files only when you ask:
 - **Generate patch mod**, **Build** and **Pins** add their own mods to the
   game's `mod` folder, as links. Their names start with `cold_steel_`.
   Deleting the playset removes them.
+- **Delete local mod** moves a local mod's `.mod` file and folder to the
+  trash, after asking.
 
 Each Paradox file is backed up first, and nothing is written while the
 launcher or the game is open.

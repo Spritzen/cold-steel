@@ -27,7 +27,7 @@ def config_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """Playsets, conflict choices, patch mods, pinned copies and builds.
+    """Playsets, conflict choices, patch mods, pinned copies, builds and backups.
     `~/.local/share/cold-steel/`."""
     return _xdg("XDG_DATA_HOME", ".local/share")
 

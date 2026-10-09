@@ -18,14 +18,14 @@ Two things must both be true before we say so:
   isn't missing.
 
 Older alone is too common: authors often don't update `supported_version`.
-On the real playsets, each test alone flagged mods that worked; together they
-flagged only the one that broke.
+Each test alone flags mods that work; together they flag the ones that break
+(decision 63).
 
 The game's graphics entities (`gfx/**/*.asset`) are the exception: a mod of
 any version that replaces one of those files and leaves game entities defined
-nowhere gets a softer note (`soft`). Real Space - System Scale says 4.5 but
-ships older copies, which drop 116 of the game's entities. Only six installed
-mods replace those files at all, so this stays quiet.
+nowhere gets a softer note (`soft`). A mod can say it's made for the current
+game and still ship old copies of these files. Few mods replace them, so the
+note stays quiet.
 """
 
 from collections import Counter

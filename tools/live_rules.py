@@ -9,7 +9,7 @@ Each definition writes a line to the game's log saying which one ran.
     python3 tools/live_rules.py check     # reads logs/game.log and reports each rule
     python3 tools/live_rules.py remove    # deletes the two mods again
 
-To check the patch mod instead (Phase 5): in the Conflicts window, choose the
+To check the patch mod instead: in the Conflicts window, choose the
 version that doesn't win now for every conflict, generate the patch mod, play,
 then run `check --patched`. Every rule should then give the other answer.
 

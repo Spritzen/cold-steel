@@ -1,9 +1,9 @@
 """Build: a playset merged into one standalone mod.
 
-    record = Builder(library, as_played(playset), index_cache, builds_dir())(ctx)
+    record, index = Builder(library, as_played(playset), index_cache, builds_dir())(ctx)
 
 The build carries out what the playset and its patch mod say. It decides
-nothing new: Phase 5 already settled the clashes the user cared about.
+nothing new: the patch mod already settles the clashes the user cared about.
 
 - Mods are copied in load order, the patch mod last. A file at the same path,
   ignoring case, replaces the earlier one, as it does in the game.
@@ -14,8 +14,8 @@ nothing new: Phase 5 already settled the clashes the user cared about.
 - The built mod gets the Cold Steel icon as its thumbnail, and every tag of
   the mods it's built from, each once.
 
-Afterwards the Phase 4 winner rules run on the built mod: every clash in the
-playset must have the same winner there (check_build).
+Afterwards the winner rules (merge_rules.py) run on the built mod: every clash
+in the playset must have the same winner there (check_build).
 
 The build lives in `~/.local/share/cold-steel/builds/<playset id>/`, linked into
 the game's mod folder. Its record, `builds/<playset id>.json`, lists where

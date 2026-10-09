@@ -1,6 +1,6 @@
-"""Phase 6: pinned copies of Workshop mods.
+"""Pinned copies of Workshop mods.
 
-The checks follow the phase's "Done when" list: pinning copies each Workshop
+The checks follow Phase 6's "Done when" list: pinning copies each Workshop
 mod exactly, an update shows what changed before you accept it, a pinned
 playset survives unsubscribing, and copies share the files they have in common.
 """
