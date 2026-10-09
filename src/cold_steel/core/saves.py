@@ -11,7 +11,7 @@ timestamp (decision 9). Nothing outside our cache file is written.
 """
 
 import os
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +19,10 @@ from pathlib import Path
 import msgspec
 
 from cold_steel.core.jobs import JobContext
+from cold_steel.core.library import Library
 from cold_steel.core.mods import Stamp
+from cold_steel.core.playsets import as_played
+from cold_steel.core.version import is_outdated
 from cold_steel.paradox.game import Game
 from cold_steel.paradox.save import (
     SaveError,
@@ -30,6 +33,7 @@ from cold_steel.paradox.save import (
 )
 from cold_steel.store import paths
 from cold_steel.store.files import load_msgpack, save_msgpack
+from cold_steel.store.playsets import Playset
 from cold_steel.store.saves import Binding, BindingsFile, load_bindings, save_bindings
 
 # Bump when SaveInfo or CachedFile change shape, so old caches are thrown away.
@@ -229,3 +233,128 @@ def unbound_saves(
 ) -> list[Save]:
     """The saves bound to no playset that exists, newest first."""
     return [s for s in saves if book.playset_of(s.folder) not in playset_ids]
+
+
+# Binding on their own, and how a save compares with its playset now
+
+
+def played_mods(playset: Playset, library: Library) -> tuple[str, ...]:
+    """The mods the game loads for a playset, by name, in load order: what a
+    save file made with it lists. Pinned copies keep their mod's name."""
+    names = {m.key: m.name for m in library.every_mod}
+    return tuple(names[e.key] for e in as_played(playset).entries if e.enabled and e.key in names)
+
+
+def played_since(saves: Iterable[Save], book: BindingBook, since: int) -> list[str]:
+    """Saves with a file written since `since` (nanoseconds) and no binding yet.
+    After Play, these are bound to the playset that was played (decision 82)."""
+    return [s.folder for s in saves if s.saved >= since and book.get(s.folder) is None]
+
+
+def suggest(
+    saves: Iterable[Save], book: BindingBook, played: Mapping[str, tuple[str, ...]]
+) -> dict[str, str]:
+    """Save folder -> the id of the one playset whose mods, as played (`played`,
+    by playset id), are exactly its newest file's. Only for saves never bound,
+    or bound to a playset that's gone. When several playsets match, as copies
+    of one playset do, none is suggested."""
+    by_mods: dict[tuple[str, ...], list[str]] = {}
+    for playset_id, mods in played.items():
+        by_mods.setdefault(mods, []).append(playset_id)
+    found: dict[str, str] = {}
+    for save in saves:
+        binding = book.get(save.folder)
+        if binding is not None and (not binding.playset or binding.playset in played):
+            continue  # unbound by choice, or bound
+        info = save.info
+        matches = by_mods.get(info.mods, []) if info else []
+        if len(matches) == 1:
+            found[save.folder] = matches[0]
+    return found
+
+
+@dataclass(frozen=True)
+class SaveCheck:
+    """How a save's newest file compares with its playset now."""
+
+    added: tuple[str, ...] = ()  # mods the playset has that the file doesn't
+    removed: tuple[str, ...] = ()  # mods the file has that the playset doesn't any more
+    reordered: bool = False  # the same mods, in another order
+    older_build: bool = False  # the build was redone since, and not accepted for this save
+    patch_changed: bool = False  # the patch mod was generated again since
+    older_game: bool = False  # written by an older game version (major.minor)
+
+    @property
+    def mods_differ(self) -> bool:
+        return bool(self.added or self.removed or self.reordered)
+
+    @property
+    def marks(self) -> tuple[str, ...]:
+        """ "Mods differ", "Older build", "Patch changed", "Older game": each that applies."""
+        return tuple(
+            text
+            for on, text in (
+                (self.mods_differ, "Mods differ"),
+                (self.older_build, "Older build"),
+                (self.patch_changed, "Patch changed"),
+                (self.older_game, "Older game"),
+            )
+            if on
+        )
+
+    def details(self) -> list[str]:
+        """One sentence per mark."""
+        lines: list[str] = []
+        if self.added:
+            lines.append("Added since: " + ", ".join(self.added))
+        if self.removed:
+            lines.append("Removed since: " + ", ".join(self.removed))
+        if self.reordered:
+            lines.append("The same mods, in another load order")
+        if self.older_build:
+            lines.append("The playset was built again after this save's newest file")
+        if self.patch_changed:
+            lines.append("The patch mod was generated again after this save's newest file")
+        if self.older_game:
+            lines.append("Written by an older version of the game")
+        return lines
+
+
+def check_save(
+    save: Save,
+    mods: Sequence[str],
+    game_version: str,
+    *,
+    build: str = "",
+    patch_written: int = 0,
+) -> SaveCheck:
+    """Compare a save's newest readable file with its playset now.
+
+    `mods` is the playset as played (played_mods). `build` is when the built
+    mod it plays was last built (BuildRecord.built), for a built playset, and
+    "" once the save was kept with that build. `patch_written` is when its
+    patch mod was last generated, in nanoseconds.
+    """
+    file = next((f for f in save.files if f.info), None)
+    if file is None or file.info is None:
+        return SaveCheck()
+    info = file.info
+    in_file, now = set(info.mods), set(mods)
+    added = tuple(m for m in mods if m not in in_file)
+    removed = tuple(m for m in info.mods if m not in now)
+    return SaveCheck(
+        added=added,
+        removed=removed,
+        reordered=not added and not removed and tuple(mods) != info.mods,
+        older_build=bool(build) and file.saved < _nanoseconds(build),
+        patch_changed=patch_written > file.saved,
+        older_game=is_outdated(info.version.rsplit(" ", 1)[-1], game_version),
+    )
+
+
+def _nanoseconds(stamp: str) -> int:
+    """A time as BuildRecord.built has it, "2026-10-09 14:03". 0 if unreadable."""
+    try:
+        return int(datetime.strptime(stamp, "%Y-%m-%d %H:%M").timestamp() * 1e9)
+    except ValueError:
+        return 0

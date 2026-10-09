@@ -1,6 +1,8 @@
 """The main Cold Steel window: playsets on the left, the mod list on the right."""
 
+import contextlib
 import math
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -66,6 +68,7 @@ from cold_steel.core.build import (
     builds_dir,
     built_from,
     load_record,
+    load_stamp,
     not_ours,
     remove_build,
     save_record,
@@ -99,8 +102,13 @@ from cold_steel.core.resolve import ResolutionBook, choices_digest, copy_resolut
 from cold_steel.core.saves import (
     BindingBook,
     Save,
+    SaveCheck,
     SaveScanner,
     bound_saves,
+    check_save,
+    played_mods,
+    played_since,
+    suggest,
     unbound_saves,
 )
 from cold_steel.core.share import ShareError, load_share_file, save_share_file
@@ -247,6 +255,10 @@ class MainWindow(QMainWindow):
         self.saves: tuple[Save, ...] | None = None
         self._saves_task: Task | None = None
         self._saves_dialog: SavesDialog | None = None
+        # The playset Play last started, and when (nanoseconds). New saves written
+        # since are bound to it once the game closes.
+        self._played: tuple[str, int] | None = None
+        self._bind_played = False  # the next save scan does that binding
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -436,6 +448,8 @@ class MainWindow(QMainWindow):
         self.pin_label.hide()
         self.launcher_label = QLabel(wordWrap=True)
         self.launcher_label.hide()
+        self.saves_label = QLabel(wordWrap=True)
+        self.saves_label.hide()
         self.old_label = QLabel(wordWrap=True)
         self.old_label.setStyleSheet("color: #d9534f;")
         self.old_label.hide()
@@ -483,6 +497,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.missing_label)
         layout.addWidget(self.pin_label)
         layout.addWidget(self.launcher_label)
+        layout.addWidget(self.saves_label)
         layout.addWidget(self.old_label)
         layout.addWidget(self.table)
 
@@ -914,7 +929,6 @@ class MainWindow(QMainWindow):
         self.sync_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
         self.playset_bar.setVisible(chosen)
-        self._show_saves(playset)
         self._refresh_conflicts()
 
     def _show_playset(self, playset: Playset | None) -> None:
@@ -935,6 +949,7 @@ class MainWindow(QMainWindow):
         self.missing_label.setVisible(bool(missing))
         self._show_pin_state(playset)
         self._show_launcher_state(playset)
+        self._show_saves(playset)
         self._check_old_copies()
 
     # Changing playsets
@@ -1338,11 +1353,13 @@ class MainWindow(QMainWindow):
             + "\n\nPlay anyway?",
         ):
             return
+        started = time.time_ns()
         try:
             process = self.launch(plan, self.library.game, self.backup_dir)
         except PlayError as error:
             self.tell("Play", str(error))
             return
+        self._played = (playset.id, started)
         self.book.set_active(playset.id)
         self._fill_playsets(playset.id)
         self.statusBar().showMessage(f"Stellaris is starting with {playset.name}")
@@ -1396,6 +1413,8 @@ class MainWindow(QMainWindow):
         self._game = None
         self.statusBar().showMessage("Stellaris closed. Reading its error log…")
         self._read_errors(show=False)
+        self._bind_played = True
+        self._scan_saves()
 
     # Conflicts
 
@@ -1773,8 +1792,24 @@ class MainWindow(QMainWindow):
             return  # a newer scan replaced this one
         self._saves_task = None
         self.saves = saves
+        if self._bind_played:
+            self._bind_new_saves(saves)
         self._show_saves(self.selected_playset())
         self.saves_found.emit(saves)
+
+    def _bind_new_saves(self, saves: tuple[Save, ...]) -> None:
+        """Bind the saves written since Play to the playset it played (decision 82)."""
+        self._bind_played = False
+        played, book, bindings = self._played, self.book, self.bindings
+        if played is None or book is None or bindings is None:
+            return
+        playset = book.get(played[0])
+        new = played_since(saves, bindings, played[1])
+        if playset is None or not new:
+            return
+        bindings.bind(new, playset.id)
+        names = ", ".join(s.empire for s in saves if s.folder in new)
+        self.statusBar().showMessage(f"New save(s) bound to {playset.name}: {names}")
 
     def show_saves(self) -> None:
         """Open the Saves window for the selected playset, and read the saves again."""
@@ -1791,17 +1826,61 @@ class MainWindow(QMainWindow):
         self._scan_saves()  # finds files written since
 
     def _show_saves(self, playset: Playset | None, *, opening: bool = False) -> None:
-        """The Saves button's count, and the Saves window if it's open."""
-        saves, bindings = self.saves, self.bindings
+        """The Saves button's count, the line above the mod list, and the Saves
+        window if it's open."""
+        saves, bindings, library = self.saves, self.bindings, self.library
         bound = bound_saves(saves or (), bindings, playset.id) if playset and bindings else []
         self.saves_button.setText(f"Saves ({len(bound)})" if bound else "Saves")
+        checks = self._check_saves(playset, bound) if playset and library else {}
+        differ = [s.empire for s in bound if checks[s.folder].mods_differ]
+        if differ:
+            self.saves_label.setText(
+                f"{len(differ)} save(s) of this playset were made with other mods than it "
+                f"has now: {', '.join(differ)}. Saves… says which."
+            )
+        self.saves_label.setVisible(bool(differ))
+
         dialog = self._saves_dialog
         if dialog is None or playset is None or self.book is None or bindings is None:
             return
         if opening or dialog.isVisible():
-            ids = {p.id for p in self.book.playsets}
-            unbound = unbound_saves(saves or (), bindings, ids)
-            dialog.set_state(playset, self.book.playsets, None if saves is None else bound, unbound)
+            playsets = self.book.playsets
+            unbound = unbound_saves(saves or (), bindings, {p.id for p in playsets})
+            played = {p.id: played_mods(p, library) for p in playsets} if library else {}
+            by_id = {p.id: p for p in playsets}
+            suggested = {f: by_id[pid] for f, pid in suggest(unbound, bindings, played).items()}
+            dialog.set_state(
+                playset, playsets, None if saves is None else bound, unbound, checks, suggested
+            )
+
+    def _check_saves(self, playset: Playset, saves: Sequence[Save]) -> dict[str, SaveCheck]:
+        """How each of a playset's saves compares with the playset now."""
+        library, bindings = self.library, self.bindings
+        if library is None or bindings is None or not saves:
+            return {}
+        mods = played_mods(playset, library)
+        build = ""
+        for entry in playset.entries:
+            source = built_from(entry.key)
+            stamp = load_stamp(self._build_dir, source) if source else None
+            if stamp is not None and stamp.built_playset == playset.id:
+                build = stamp.built
+        patch_written = 0
+        if any(e.key == patch_key(playset.id) and e.enabled for e in playset.entries):
+            with contextlib.suppress(OSError):  # not generated yet
+                patch_written = (self._patch_dir / playset.id / "descriptor.mod").stat().st_mtime_ns
+        checks: dict[str, SaveCheck] = {}
+        for save in saves:
+            binding = bindings.get(save.folder)
+            kept = binding is not None and binding.build == build
+            checks[save.folder] = check_save(
+                save,
+                mods,
+                library.game.version,
+                build="" if kept else build,
+                patch_written=patch_written,
+            )
+        return checks
 
     def bind_saves(self, folders: Sequence[str], playset_id: str) -> None:
         """Bind saves to a playset, or move them to it."""
