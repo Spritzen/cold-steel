@@ -276,7 +276,8 @@ class MainWindow(QMainWindow):
         self._playsets_path = playsets_path or playsets_file()
         self.backup_dir = backup_dir or paths.data_dir() / "backups"
         self.book: PlaysetBook | None = None
-        # Writes dlc_load.json and starts the game. Tests swap in a stand-in.
+        # Writes dlc_load.json (and continue_game.json for Continue), then starts the
+        # game. Tests swap in a stand-in.
         self.launch: Launch = play
         # Starts the Paradox launcher. Tests swap in a stand-in.
         self.start_launcher: StartLauncher = start_launcher

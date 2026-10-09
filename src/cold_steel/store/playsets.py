@@ -38,7 +38,7 @@ class Playset(msgspec.Struct, frozen=True):
 
 class PlaysetFile(msgspec.Struct):
     version: int = PLAYSETS_VERSION
-    active: str = ""  # the id of the playset Play uses
+    active: str = ""  # the id of the playset last played, shown in bold
     playsets: list[Playset] = msgspec.field(default_factory=list)
 
 

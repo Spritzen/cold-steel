@@ -8,8 +8,8 @@ the one the game was reading. If none has it, the file is the game's own, and
 the error goes under "game / unknown" with the errors that name no file.
 
 Some entries only say a mod replaced something: "Object with key: x already
-exists, using the one at ...". That's what mods are for, and on a real
-24-mod playset it was 84% of the log. Those are marked `override`, so the
+exists, using the one at ...". That's what mods are for, and it's most
+of a real playset's log. Those are marked `override`, so the
 window can fold them away (is_override).
 
 Universal Resource Patch and mods like it list resources from many mods, so

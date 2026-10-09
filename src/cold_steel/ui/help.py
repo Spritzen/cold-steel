@@ -31,12 +31,15 @@ changes them, and never downloads or subscribes to mods.</li>
 <li><b>Your launcher playsets.</b> The first time it opens, Cold Steel copies them
 into its own list. After that the launcher only changes when you press
 <b>Export to launcher</b>, <b>Open in launcher</b> or <b>Sync launcher</b>.</li>
+<li><b>Your saves,</b> in the game's save folder and Steam Cloud's, to show which
+playset each one belongs to.</li>
 </ul>
 
 <h3>It changes Paradox's files only when you ask</h3>
 <ul>
 <li><b>Play</b> writes <code>dlc_load.json</code>, which tells the game what to load. For a
-mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.</li>
+mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.
+<b>Continue</b> also writes <code>continue_game.json</code>, so the game opens that save.</li>
 <li><b>Export to launcher</b> and <b>Open in launcher</b> write the playset into the
 launcher's database. <b>File &rsaquo; Sync launcher</b> replaces all its playsets with
 Cold Steel's.</li>
@@ -44,6 +47,9 @@ Cold Steel's.</li>
 game's <code>mod</code> folder. Their names start with <code>cold_steel_</code>.</li>
 <li><b>Delete local mod</b> moves a local mod's <code>.mod</code> file and folder to the
 trash, after asking. If the folder is a link, only the link goes.</li>
+<li><b>Rebuilding</b> a playset that has saves asks which to keep. The local files
+of the others go to the trash only if you tick that box. Steam Cloud's are never
+touched.</li>
 </ul>
 <p>Every Paradox file is backed up before it changes, and nothing is written while
 the launcher or the game is open.</p>
@@ -51,8 +57,8 @@ the launcher or the game is open.</p>
 <h3>Its own files</h3>
 <ul>
 <li><code>{paths.shown(paths.config_dir())}</code>: settings</li>
-<li><code>{paths.shown(paths.data_dir())}</code>: playsets, conflict choices, patch mods, pinned
-copies, builds and backups</li>
+<li><code>{paths.shown(paths.data_dir())}</code>: playsets, which playset each save belongs
+to, conflict choices, patch mods, pinned copies, builds and backups</li>
 <li><code>{paths.shown(paths.cache_dir())}</code>: what it remembers about your mods.
 Safe to delete</li>
 </ul>

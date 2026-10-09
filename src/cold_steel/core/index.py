@@ -8,7 +8,8 @@ Speed rules (decision 9):
 - A mod whose files all kept their size and timestamp isn't looked at again.
 - A changed file is hashed with xxhash. If the hash is the same, its old
   definitions are kept.
-- Only files that really changed are parsed, in parallel across CPU cores.
+- Only files that really changed are parsed: in worker processes when there's
+  more than PARALLEL_BYTES to read, since starting them costs time.
 
 Each mod's index is saved to its own file in `~/.cache/cold-steel/index/`, so
 changing one mod rewrites one small file.

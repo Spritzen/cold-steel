@@ -1,4 +1,5 @@
-"""Sort: a sensible default load order for a playset. Later mods win.
+"""Sort: a sensible default load order for a playset. A mod loaded later wins a
+clash between whole files; objects follow each folder's rule (merge_rules.py).
 
 1. Each mod loads after the mods it declares as dependencies.
 2. Known "load first" and "load last" mods move to the top or bottom. The

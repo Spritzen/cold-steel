@@ -152,6 +152,27 @@ makes a playset that plays just that mod. The build report shows where every
 file came from. A built mod is for your own use only. It contains other
 authors' work, so don't upload it.
 
+### Saves
+
+A save made with one set of mods can break when it's loaded with another, and
+the game only warns when a mod's name is missing. Cold Steel ties each save to
+the playset it belongs to, so it can tell you.
+
+- **Saves…** lists the playset's saves, newest first. Open one to see its
+  files, local and in Steam Cloud.
+- A save you start with **▶ Play** belongs to that playset when the game
+  closes. Older saves are listed as unbound, with the playset whose mods match
+  them suggested. **Bind all suggested** takes those suggestions, and
+  right-click moves a save to another playset or unbinds it.
+- A save is marked ⚠ when the playset's mods changed since it was made, or its
+  build or patch mod was made again, or it's from an older game version.
+  Hover over the mark to see why.
+- **Continue**, beside Play, plays the playset and opens its newest save,
+  skipping the game's main menu. It asks first if the save is marked ⚠.
+- **Build** on a playset that was built before asks what to do with the saves
+  of the built playset: keep each one, or let it go. The local files of saves
+  you let go are moved to the trash only if you tick that box.
+
 ### Share playsets
 
 - **Playset › Import from launcher** and **Export to launcher** copy playsets
@@ -196,11 +217,12 @@ It also shows where Cold Steel keeps its own files.
 
 ## Your files are safe
 
-Cold Steel never changes Steam's folders or your mods, and never downloads
-anything. It changes Paradox's files only when you ask:
+Cold Steel never changes Steam's folders, your mods or your save files, and
+never downloads anything. It changes Paradox's files only when you ask:
 
 - **Play** writes `dlc_load.json`, which tells the game what to load. For a mod
   the launcher hasn't seen yet, it also adds the `.mod` file the game needs.
+  **Continue** also writes `continue_game.json`, which names the save to open.
 - **Export to launcher** and **Open in launcher** write the playset into the
   launcher's database. **Sync launcher** writes all of them, and removes the
   launcher's others.
@@ -209,6 +231,8 @@ anything. It changes Paradox's files only when you ask:
   Deleting the playset removes them.
 - **Delete local mod** moves a local mod's `.mod` file and folder to the
   trash, after asking.
+- **Build**, when it rebuilds, moves the local files of saves you let go to the
+  trash, only if you tick that box. Steam Cloud's copies are never touched.
 
 Each Paradox file is backed up first, and nothing is written while the
 launcher or the game is open.
@@ -216,7 +240,7 @@ launcher or the game is open.
 | Folder | What's in it |
 |---|---|
 | `~/.config/cold-steel/` | Your settings |
-| `~/.local/share/cold-steel/` | Your playsets, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
+| `~/.local/share/cold-steel/` | Your playsets, which playset each save belongs to, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
 | `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## What it won't do

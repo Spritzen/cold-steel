@@ -86,7 +86,14 @@ def test_soft_text_leaves_the_desktops_other_colours(qapp: QApplication) -> None
 
 def test_welcome_says_what_is_changed(qtbot: QtBot) -> None:
     text = welcome_text()
-    for promise in ("dlc_load.json", "backed up", "cold_steel_", "Export to launcher"):
+    for promise in (
+        "dlc_load.json",
+        "continue_game.json",
+        "backed up",
+        "cold_steel_",
+        "Export to launcher",
+        "go to the trash only if you tick",
+    ):
         assert promise in text
     dialog = WelcomeDialog()
     qtbot.addWidget(dialog)

@@ -6,7 +6,7 @@ was pinned to, whatever Steam does.
     drift = PinChecker(store, library, ids)(ctx)  # what Steam changed since
 
 Steam changes a Workshop folder whenever an author updates, and deletes it
-when you unsubscribe (STG paid for learning this). A pinned copy changes only
+when you unsubscribe. A pinned copy changes only
 when you accept an update.
 
 Layout, in `~/.local/share/cold-steel/snapshots/` (decision 50):
