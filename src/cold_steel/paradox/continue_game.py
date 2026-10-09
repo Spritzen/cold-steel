@@ -1,5 +1,5 @@
 """`continue_game.json`: the save file the game opens when it's started with
-`-continuelastsave`, skipping its main menu. The game writes it as it saves:
+`--continuelastsave`, skipping its main menu. The game writes it as it saves:
 
     {
         "title": "save games/commonwealthofman_1251622081/2203.01.08",
@@ -20,7 +20,9 @@ from cold_steel.paradox.backup import backup_file
 from cold_steel.paradox.save import SAVE_FOLDER
 
 FILE_NAME = "continue_game.json"
-CONTINUE_ARG = "-continuelastsave"
+# Two dashes, as the Paradox launcher passes it. With one, the game stopped at
+# its main menu (seen on the host, 2026-10-09).
+CONTINUE_ARG = "--continuelastsave"
 
 
 @dataclass(frozen=True)
