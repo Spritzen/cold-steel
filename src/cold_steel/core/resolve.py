@@ -6,11 +6,10 @@ version, and which conflicts to ignore.
     book.state(conflict, index)  -> NONE, CHOSEN or STALE
 
 A choice is STALE when any version of the object changed after it was made: a
-mod or the game updated, or a mod was added or removed. A mod's pinned copy
-counts as the mod (mods.base_key), so pinning or unpinning changes nothing
-unless the files differ. Its choice was made
-against text that's no longer there, so it needs another look before the patch
-mod uses it again.
+mod or the game updated, or a mod was added or removed. It was made against
+text that's no longer there, so it needs another look before the patch mod
+uses it again. A mod's pinned copy counts as the mod (mods.base_key), so
+pinning or unpinning changes nothing unless the files differ.
 
 Every change is saved at once.
 """

@@ -31,8 +31,8 @@ those objects (`lost`), so the window can say so.
 
 Many errors name no file, only a thing: "Missing sound effect: x". For a few
 known shapes we search the loaded mods' script and graphics files for that
-name. If exactly one mod mentions it, the error goes under that mod (`quoted`).
-On Cold Steel Mix this placed 75 of the 153 problems that named no file.
+name. If exactly one mod mentions it, the error goes under that mod (`quoted`,
+decision 73).
 """
 
 import os

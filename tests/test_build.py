@@ -1,6 +1,6 @@
-"""Phase 6: merging a playset into one mod, and linking it into the mod folder.
+"""Merging a playset into one mod, and linking it into the mod folder.
 
-The main check: build a playset with clashes and a patch mod, then the Phase 4
+The main check: build a playset with clashes and a patch mod, then the
 winner rules must pick the same winner for every clash in the built mod.
 """
 

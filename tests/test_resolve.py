@@ -1,7 +1,7 @@
-"""Phase 5: choosing winners, and the patch mod that makes them win.
+"""Choosing winners, and the patch mod that makes them win.
 
 The main check: build the patch, rescan, then find the conflicts again with
-the patch in the playset. The Phase 4 winner rules must then pick the patch's
+the patch in the playset. The winner rules must then pick the patch's
 version of every object the user chose for.
 """
 

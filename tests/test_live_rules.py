@@ -68,7 +68,7 @@ def test_our_finder_predicts_what_the_live_run_expects(sample_install: SampleIns
 def test_the_patched_live_run_expects_every_other_version(
     sample_install: SampleInstall, tmp_path: Path
 ) -> None:
-    """Phase 5's live run: the patch picks the version that loses without it."""
+    """The patch mod's live run: the patch picks the version that loses without it."""
     tool = load_tool()
     game = find_game((sample_install.steam_dir,))
     tool.install(game)

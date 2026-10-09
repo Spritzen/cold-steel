@@ -3,8 +3,8 @@
 Reading opens the file with SQLite's `mode=ro`, so it can't change anything.
 Writing backs the file up first (decision 6). `write_playset` changes only
 the one playset it was given; `replace_playsets` makes the launcher's list
-exactly the one it was given. Don't call it while the launcher
-is running: the launcher keeps its own copy of the data in memory.
+exactly the one it was given. Don't call either while the launcher is
+running: the launcher keeps its own copy of the data in memory.
 """
 
 import os

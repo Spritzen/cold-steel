@@ -1,4 +1,4 @@
-"""Phase 7: the settings, the theme and the first-run screen."""
+"""The settings, the theme and the first-run screen."""
 
 import json
 import shutil

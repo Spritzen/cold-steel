@@ -198,7 +198,7 @@ def test_missing_game_shows_how_to_fix_it(qtbot: QtBot, tmp_path: Path) -> None:
     assert "Stellaris wasn't found" in win.message.text()
 
 
-# Phase 2: playsets
+# Playsets
 
 
 def sidebar(window: MainWindow) -> list[str]:
@@ -437,7 +437,7 @@ def test_import_from_launcher(window: MainWindow) -> None:
     assert sidebar(window)[-1] == "Second Playset (2) (1)"
 
 
-# Phase 3: health and errors
+# Health and errors
 
 
 def health_badges(window: MainWindow) -> dict[str, str]:
@@ -583,7 +583,7 @@ def test_errors_are_read_when_the_game_closes(
     assert window.statusBar().currentMessage() == "Stellaris closed. Its error log is empty."
 
 
-# Phase 4: conflicts
+# Conflicts
 
 
 @pytest.fixture
@@ -747,7 +747,7 @@ def test_conflicts_for_one_mod_and_after_a_change(qtbot: QtBot, clashing: MainWi
     }
 
 
-# Phase 5: resolving conflicts
+# Resolving conflicts
 
 
 def select(conflicts: ConflictsWindow, key: str) -> None:
@@ -952,7 +952,7 @@ def test_rows_use_the_themes_text_colour(qtbot: QtBot, clashing: MainWindow) -> 
         assert item.data(col, Qt.ItemDataRole.ForegroundRole) is None
 
 
-# Phase 6: pinning and building
+# Pinning and building
 
 
 def test_pin_a_playset_then_accept_an_update(
@@ -1128,7 +1128,7 @@ def test_a_deleted_local_mod_lands_in_the_trash(
     assert "My Local Tweaks" not in shown(window)
 
 
-# Phase 7: settings, shortcuts, help
+# Settings, shortcuts, help
 
 
 def test_settings_are_sent_only_when_changed(
