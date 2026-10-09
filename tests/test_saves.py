@@ -17,6 +17,7 @@ from cold_steel.core.saves import (
     SaveScanner,
     bound_saves,
     check_save,
+    compare_mods,
     played_mods,
     played_since,
     suggest,
@@ -287,3 +288,20 @@ def test_a_save_is_compared_with_its_playset() -> None:
     newer_game = check_save(save, ("A", "B"), "v4.6.0")
     assert newer_game.marks == ("Older game",)
     assert not check_save(save, ("A", "B"), "v4.5.9").older_game  # the patch number doesn't count
+
+
+def test_compare_mods() -> None:
+    assert compare_mods(("A", "B"), ("A", "B")) == ((), (), False)
+    assert compare_mods(("A", "B"), ("B", "A")) == ((), (), True)
+    assert compare_mods(("A", "B"), ("A", "C", "D")) == (("C", "D"), ("B",), False)
+
+
+def test_kept_saves_take_the_new_build(tmp_path: Path) -> None:
+    book = BindingBook.open(tmp_path / "saves.json")
+    book.bind([UNE, ELVES], "built")
+    book.keep([UNE, "never bound"], "2026-10-09 15:00")
+    une = book.get(UNE)
+    assert une is not None and une.playset == "built" and une.build == "2026-10-09 15:00"
+    assert book.get("never bound") is None  # keeping doesn't bind
+    elves = book.get(ELVES)
+    assert elves is not None and elves.build == ""

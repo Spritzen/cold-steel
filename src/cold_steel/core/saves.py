@@ -203,6 +203,14 @@ class BindingBook:
             self._data.saves[folder] = Binding(playset=playset_id, bound=bound)
         self._save()
 
+    def keep(self, folders: Iterable[str], build: str) -> None:
+        """Keep saves with their built playset's new build (BuildRecord.built),
+        so they aren't marked as made with an older build."""
+        for folder in folders:
+            if binding := self._data.saves.get(folder):
+                self._data.saves[folder] = msgspec.structs.replace(binding, build=build)
+        self._save()
+
     def unbind(self, folders: Iterable[str]) -> None:
         """Unbind saves by choice. They're never suggested for a playset again."""
         for folder in folders:
@@ -273,6 +281,17 @@ def suggest(
     return found
 
 
+def compare_mods(
+    before: Sequence[str], now: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """Mods added since, mods removed since, and whether the same mods are now
+    in another order. Both are mod names in load order."""
+    was, is_ = set(before), set(now)
+    added = tuple(m for m in now if m not in was)
+    removed = tuple(m for m in before if m not in is_)
+    return added, removed, not added and not removed and tuple(now) != tuple(before)
+
+
 @dataclass(frozen=True)
 class SaveCheck:
     """How a save's newest file compares with its playset now."""
@@ -339,13 +358,11 @@ def check_save(
     if file is None or file.info is None:
         return SaveCheck()
     info = file.info
-    in_file, now = set(info.mods), set(mods)
-    added = tuple(m for m in mods if m not in in_file)
-    removed = tuple(m for m in info.mods if m not in now)
+    added, removed, reordered = compare_mods(info.mods, mods)
     return SaveCheck(
         added=added,
         removed=removed,
-        reordered=not added and not removed and tuple(mods) != info.mods,
+        reordered=reordered,
         older_build=bool(build) and file.saved < _nanoseconds(build),
         patch_changed=patch_written > file.saved,
         older_game=is_outdated(info.version.rsplit(" ", 1)[-1], game_version),
