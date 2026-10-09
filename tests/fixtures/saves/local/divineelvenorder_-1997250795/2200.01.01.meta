@@ -1,0 +1,11 @@
+version="Cygnus v4.5.1"
+name="Divine Elven Order"
+date="2200.01.01"
+required_dlcs=
+{
+	"Apocalypse"
+}
+mods=
+{
+	"Gamma Soundtrack"
+}

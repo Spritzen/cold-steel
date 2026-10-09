@@ -11,6 +11,7 @@ import pytest
 
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Scanner
+from cold_steel.core.saves import SaveScanner
 from cold_steel.paradox.game import DEFAULT_STEAM_DIRS, GameNotFound, find_game
 from conftest import snapshot
 
@@ -28,11 +29,15 @@ def test_scanning_the_real_install_changes_nothing(tmp_path: Path) -> None:
         pytest.skip("Stellaris isn't installed here")
 
     # Paradox's top-level files (the launcher database, dlc_load.json) and the
-    # mod/*.mod descriptors. Mod folders are covered by Steam's read-only mount.
+    # mod/*.mod descriptors, and the local saves. Mod folders and Steam Cloud's
+    # saves are covered by Steam's read-only mount.
     watched = [game.data_dir, game.mod_dir]
     before = [snapshot(folder, recursive=False) for folder in watched]
+    saves_before = snapshot(game.data_dir / "save games")
 
     library = Scanner(steam_dirs, tmp_path / "mods.msgpack")(JobContext())
+    SaveScanner.for_game(game, tmp_path / "saves.msgpack")(JobContext())
 
     assert library.mods
     assert [snapshot(folder, recursive=False) for folder in watched] == before
+    assert snapshot(game.data_dir / "save games") == saves_before
