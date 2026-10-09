@@ -365,7 +365,7 @@ def test_continue_backs_up_continue_game_then_skips_the_menu(
     (backup,) = backups_of(path, backups)
     assert "old_1" in backup.read_text()
     (call,) = FakePopen.calls
-    assert call["args"] == [str(game_exe), "-gdpr-compliant", "-continuelastsave"]
+    assert call["args"] == [str(game_exe), "-gdpr-compliant", "--continuelastsave"]
 
 
 @pytest.mark.parametrize(

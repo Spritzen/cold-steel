@@ -5,7 +5,7 @@ makes a playset take effect. The game is started directly, not through Steam,
 so the Paradox launcher doesn't open. Steam must be running.
 
 Continue does the same, then has the game open one save file instead of its
-main menu: `continue_game.json` names it, and `-continuelastsave` opens it.
+main menu: `continue_game.json` names it, and `--continuelastsave` opens it.
 """
 
 import subprocess
