@@ -98,10 +98,10 @@ from cold_steel.core.playsets import PlaysetBook, as_played, missing_mods
 from cold_steel.core.resolve import ResolutionBook, choices_digest, copy_resolutions
 from cold_steel.core.saves import (
     BindingBook,
-    SavedGame,
+    Save,
     SaveScanner,
-    bound_games,
-    unbound_games,
+    bound_saves,
+    unbound_saves,
 )
 from cold_steel.core.share import ShareError, load_share_file, save_share_file
 from cold_steel.core.snapshots import (
@@ -137,11 +137,11 @@ from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.full_text import line_count, show_full_text
-from cold_steel.ui.games_dialog import GamesDialog
 from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column, ModFilter, ModTableModel
 from cold_steel.ui.pins_dialog import PinsDialog
+from cold_steel.ui.saves_dialog import SavesDialog
 from cold_steel.ui.settings_dialog import SettingsDialog
 from cold_steel.ui.tasks import Task, TaskRunner
 from cold_steel.ui.thumbnails import SHOWN_SIZE, blank_thumbnail, thumbnail_job
@@ -187,8 +187,8 @@ class MainWindow(QMainWindow):
     pins_checked = Signal(object)
     # A playset was built into one mod: its BuildRecord. For tests.
     build_finished = Signal(object)
-    # The save folders were read: every SavedGame, newest first. For tests.
-    games_found = Signal(object)
+    # The save folders were read: every Save, newest first. For tests.
+    saves_found = Signal(object)
 
     def __init__(
         self,
@@ -243,10 +243,10 @@ class MainWindow(QMainWindow):
         self._build_dialog: BuildDialog | None = None
         self._saves_path = saves_path or bindings_file()
         self.bindings: BindingBook | None = None
-        # Every game in the save folders, newest first. None until the saves are read.
-        self.saved_games: tuple[SavedGame, ...] | None = None
+        # Every save in the save folders, newest first. None until they're read.
+        self.saves: tuple[Save, ...] | None = None
         self._saves_task: Task | None = None
-        self._games_dialog: GamesDialog | None = None
+        self._saves_dialog: SavesDialog | None = None
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
         self.sort_action = action("&Sort load order", self.sort_mods, "Ctrl+L")
         self.dlc_action = action("&DLC…", self.choose_dlc)
         self.play_action = action("&Play", self.play, "Ctrl+Return")
-        self.games_action = action("&Games…", self.show_games, "Ctrl+G")
+        self.saves_action = action("S&aves…", self.show_saves)
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
         self.conflicts_action = action("&Conflicts…", self.show_conflicts, "Ctrl+K")
@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self.new_action, self.copy_action, self.rename_action])
         menu.addAction(self.delete_action)
         menu.addSeparator()
-        menu.addActions([self.play_action, self.games_action])
+        menu.addActions([self.play_action, self.saves_action])
         menu.addActions([self.errors_action, self.conflicts_action])
         menu.addAction(self.delete_patch_action)
         menu.addActions([self.sort_action, self.dlc_action])
@@ -420,8 +420,8 @@ class MainWindow(QMainWindow):
         playset_bar.addWidget(self._button("DLC…", self.dlc_action))
         playset_bar.addWidget(self._button("Pins…", self.pins_action))
         playset_bar.addWidget(self._button("Build", self.build_action))
-        self.games_button = self._button("Games", self.games_action)
-        playset_bar.addWidget(self.games_button)
+        self.saves_button = self._button("Saves", self.saves_action)
+        playset_bar.addWidget(self.saves_button)
         playset_bar.addStretch()
         playset_bar.addWidget(self._button("Export to launcher", self.export_action))
         playset_bar.addWidget(self._button("Open in launcher", self.open_launcher_action))
@@ -587,7 +587,7 @@ class MainWindow(QMainWindow):
             try:
                 self.bindings = BindingBook.open(self._saves_path)
             except OSError as error:
-                problems.append(f"Your games couldn't be loaded: {error}")
+                problems.append(f"Your saves couldn't be loaded: {error}")
             else:
                 problems += self.bindings.problems
         playsets = self.book.playsets if self.book else ()
@@ -895,7 +895,7 @@ class MainWindow(QMainWindow):
             self.sort_action,
             self.dlc_action,
             self.play_action,
-            self.games_action,
+            self.saves_action,
             self.conflicts_action,
             self.pins_action,
             self.build_action,
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
         self.sync_action.setEnabled(self.book is not None)
         self.import_menu.setEnabled(self.book is not None)
         self.playset_bar.setVisible(chosen)
-        self._show_games(playset)
+        self._show_saves(playset)
         self._refresh_conflicts()
 
     def _show_playset(self, playset: Playset | None) -> None:
@@ -1003,7 +1003,7 @@ class MainWindow(QMainWindow):
             f"Delete \u201c{playset.name}\u201d? Your mods stay installed. "
             "The launcher's copy, if it has one, isn't touched. Its patch mod, its "
             "build and its pinned copies are deleted, unless another playset uses them."
-            + self._games_unbound_text(playset),
+            + self._saves_unbound_text(playset),
         ):
             self._forget_playset(playset)
             self._reload_playsets("")
@@ -1753,83 +1753,83 @@ class MainWindow(QMainWindow):
         self.pin_label.setText(text)
         self.pin_label.show()
 
-    # Games
+    # Saves
 
     def _scan_saves(self) -> None:
-        """Read the save folders, off the main thread. Unchanged saves come from the cache."""
+        """Read the save folders, off the main thread. Unchanged files come from the cache."""
         if self.library is None:
             return
         if self._saves_task is not None:
             self._saves_task.cancel()
         task = self.tasks.start(SaveScanner.for_game(self.library.game))
         self._saves_task = task
-        task.succeeded.connect(lambda games: self._saves_found(games, task))
+        task.succeeded.connect(lambda saves: self._saves_read(saves, task))
         task.failed.connect(
             lambda error: self.statusBar().showMessage(f"Reading your saves failed: {error}")
         )
 
-    def _saves_found(self, games: tuple[SavedGame, ...], task: Task) -> None:
+    def _saves_read(self, saves: tuple[Save, ...], task: Task) -> None:
         if task is not self._saves_task:
             return  # a newer scan replaced this one
         self._saves_task = None
-        self.saved_games = games
-        self._show_games(self.selected_playset())
-        self.games_found.emit(games)
+        self.saves = saves
+        self._show_saves(self.selected_playset())
+        self.saves_found.emit(saves)
 
-    def show_games(self) -> None:
-        """Open the Games window for the selected playset, and read the saves again."""
+    def show_saves(self) -> None:
+        """Open the Saves window for the selected playset, and read the saves again."""
         playset = self.selected_playset()
         if playset is None or self.library is None:
             return
-        dialog = self._games_dialog
+        dialog = self._saves_dialog
         if dialog is None:
-            dialog = self._games_dialog = GamesDialog(self)
-            dialog.bind_requested.connect(self.bind_games)
-            dialog.unbind_requested.connect(self.unbind_games)
-        self._show_games(playset, opening=True)
+            dialog = self._saves_dialog = SavesDialog(self)
+            dialog.bind_requested.connect(self.bind_saves)
+            dialog.unbind_requested.connect(self.unbind_saves)
+        self._show_saves(playset, opening=True)
         self.show_dialog(dialog)
-        self._scan_saves()  # finds games saved since
+        self._scan_saves()  # finds files written since
 
-    def _show_games(self, playset: Playset | None, *, opening: bool = False) -> None:
-        """The Games button's count, and the Games window if it's open."""
-        games, bindings = self.saved_games, self.bindings
-        bound = bound_games(games or (), bindings, playset.id) if playset and bindings else []
-        self.games_button.setText(f"Games ({len(bound)})" if bound else "Games")
-        dialog = self._games_dialog
+    def _show_saves(self, playset: Playset | None, *, opening: bool = False) -> None:
+        """The Saves button's count, and the Saves window if it's open."""
+        saves, bindings = self.saves, self.bindings
+        bound = bound_saves(saves or (), bindings, playset.id) if playset and bindings else []
+        self.saves_button.setText(f"Saves ({len(bound)})" if bound else "Saves")
+        dialog = self._saves_dialog
         if dialog is None or playset is None or self.book is None or bindings is None:
             return
         if opening or dialog.isVisible():
             ids = {p.id for p in self.book.playsets}
-            unbound = unbound_games(games or (), bindings, ids)
-            dialog.set_state(playset, self.book.playsets, None if games is None else bound, unbound)
+            unbound = unbound_saves(saves or (), bindings, ids)
+            dialog.set_state(playset, self.book.playsets, None if saves is None else bound, unbound)
 
-    def bind_games(self, folders: Sequence[str], playset_id: str) -> None:
-        """Bind games to a playset, or move them to it."""
+    def bind_saves(self, folders: Sequence[str], playset_id: str) -> None:
+        """Bind saves to a playset, or move them to it."""
         if self.bindings is None or self.book is None or not folders:
             return
         playset = self.book.get(playset_id)
         if playset is None:
             return
         self.bindings.bind(folders, playset_id)
-        self.statusBar().showMessage(f"{len(folders)} game(s) now belong to {playset.name}")
-        self._show_games(self.selected_playset())
+        self.statusBar().showMessage(f"{len(folders)} save(s) now belong to {playset.name}")
+        self._show_saves(self.selected_playset())
 
-    def unbind_games(self, folders: Sequence[str]) -> None:
+    def unbind_saves(self, folders: Sequence[str]) -> None:
         if self.bindings is None or not folders:
             return
         self.bindings.unbind(folders)
-        self.statusBar().showMessage(f"Unbound {len(folders)} game(s). Their saves stay")
-        self._show_games(self.selected_playset())
+        self.statusBar().showMessage(f"Unbound {len(folders)} save(s). Their files stay")
+        self._show_saves(self.selected_playset())
 
-    def _games_unbound_text(self, playset: Playset) -> str:
-        """For a confirm box: what happens to a playset's games when it goes."""
-        count = len(self.bindings.games_of(playset.id)) if self.bindings else 0
+    def _saves_unbound_text(self, playset: Playset) -> str:
+        """For a confirm box: what happens to a playset's saves when it goes."""
+        count = len(self.bindings.saves_of(playset.id)) if self.bindings else 0
         if not count:
             return ""
         return (
-            f" Its {count} game(s) are unbound from it. Their saves stay where they are."
+            f" Its {count} saves are unbound from it. Their files stay where they are."
             if count > 1
-            else " Its game is unbound from it. The saves stay where they are."
+            else " Its save is unbound from it. The files stay where they are."
         )
 
     # Building one mod
@@ -1911,7 +1911,7 @@ class MainWindow(QMainWindow):
         text = f"Delete the mod built from \u201c{name}\u201d? That playset and its mods stay."
         if plays_it is not None:
             text += f" \u201c{plays_it.name}\u201d, which plays just the built mod, goes too."
-            text += self._games_unbound_text(plays_it)
+            text += self._saves_unbound_text(plays_it)
         if not self.confirm(title, text):
             return
         remove_build(playset_id, self._build_dir, library.game)

@@ -1,8 +1,8 @@
-"""Which playset each game belongs to, saved as `~/.local/share/cold-steel/saves.json`.
+"""Which playset each save belongs to, saved as `~/.local/share/cold-steel/saves.json`.
 
-Keyed by game folder (`commonwealthofman_1251622081`), which covers the game's
-saves in the local folder and in Steam Cloud's (decision 80). Losing this file
-loses nothing in game: only the links between games and playsets.
+Keyed by save folder (`commonwealthofman_1251622081`), which covers the save's
+files in the local folder and in Steam Cloud's (decision 80). Losing this file
+loses nothing in game: only the links between saves and playsets.
 """
 
 from pathlib import Path
@@ -16,17 +16,17 @@ BINDINGS_VERSION = 1
 
 
 class Binding(msgspec.Struct, frozen=True):
-    # The id of the playset the game belongs to. Empty: you unbound it, so it's
+    # The id of the playset the save belongs to. Empty: you unbound it, so it's
     # never suggested for a playset again.
     playset: str = ""
     bound: str = ""  # when, as "2026-10-09 14:03"
-    # For a built playset: the build (BuildRecord.built) last accepted for this game.
+    # For a built playset: the build (BuildRecord.built) last accepted for this save.
     build: str = ""
 
 
 class BindingsFile(msgspec.Struct):
     version: int = BINDINGS_VERSION
-    games: dict[str, Binding] = msgspec.field(default_factory=dict)  # by game folder
+    saves: dict[str, Binding] = msgspec.field(default_factory=dict)  # by save folder
 
 
 def bindings_file() -> Path:

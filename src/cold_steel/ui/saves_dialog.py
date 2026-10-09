@@ -1,4 +1,4 @@
-"""A playset's games: the ones bound to it, and the ones bound to no playset."""
+"""A playset's saves: the ones bound to it, and the ones bound to no playset."""
 
 from collections.abc import Sequence
 from datetime import datetime
@@ -19,39 +19,39 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cold_steel.core.saves import Save, SavedGame
+from cold_steel.core.saves import Save, SaveFile
 from cold_steel.store.playsets import Playset
 from cold_steel.ui.full_text import show_full_text
 
 FOLDER_ROLE = Qt.ItemDataRole.UserRole
-COLUMNS = ["Game", "In game", "Saved", "Version", "Where"]
+COLUMNS = ["Save", "In game", "Saved", "Version", "Where"]
 LOCAL, CLOUD = "Local", "Steam Cloud"
 
 
 def saved_text(saved: int, now: datetime | None = None) -> str:
-    """When a save was written: "7 Oct 17:35", with the year if it isn't this one."""
+    """When a file was written: "7 Oct 17:35", with the year if it isn't this one."""
     when = datetime.fromtimestamp(saved / 1e9)
     now = now or datetime.now()
     day = f"{when.day} {when:%b}" + (f" {when.year}" if when.year != now.year else "")
     return f"{day} {when:%H:%M}"
 
 
-def _version(save: Save) -> str:
+def _version(file: SaveFile) -> str:
     # "Cygnus v4.5.2" -> "v4.5.2"
-    return save.info.version.rsplit(" ", 1)[-1] if save.info else ""
+    return file.info.version.rsplit(" ", 1)[-1] if file.info else ""
 
 
-def _where(saves: Sequence[Save]) -> str:
+def _where(files: Sequence[SaveFile]) -> str:
     places = [
-        p for p, cloud in ((LOCAL, False), (CLOUD, True)) if any(s.cloud == cloud for s in saves)
+        p for p, cloud in ((LOCAL, False), (CLOUD, True)) if any(f.cloud == cloud for f in files)
     ]
     return " and ".join(places)
 
 
-class GamesDialog(QDialog):
-    # Bind these games (folders) to a playset (id), or move them to it.
+class SavesDialog(QDialog):
+    # Bind these saves (folders) to a playset (id), or move them to it.
     bind_requested = Signal(tuple, str)
-    # Unbind these games (folders). They're not suggested for a playset again.
+    # Unbind these saves (folders). They're not suggested for a playset again.
     unbind_requested = Signal(tuple)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -77,7 +77,7 @@ class GamesDialog(QDialog):
         split.setSizes([320, 200])
 
         self.bind_button = QPushButton("Bind to this playset")
-        self.bind_button.setToolTip("Bind the selected unbound games to this playset")
+        self.bind_button.setToolTip("Bind the selected unbound saves to this playset")
         self.bind_button.clicked.connect(self._bind_selected)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
@@ -108,68 +108,68 @@ class GamesDialog(QDialog):
         self,
         playset: Playset,
         playsets: Sequence[Playset],
-        bound: Sequence[SavedGame] | None,
-        unbound: Sequence[SavedGame] = (),
+        bound: Sequence[Save] | None,
+        unbound: Sequence[Save] = (),
     ) -> None:
-        """Show a playset's games. `bound` is None while the saves are still being read."""
+        """Show a playset's saves. `bound` is None while the saves are still being read."""
         self.playset, self.playsets = playset, tuple(playsets)
-        self.setWindowTitle(f"Games of {playset.name}")
+        self.setWindowTitle(f"Saves of {playset.name}")
         self._fill(self.bound, bound or ())
         self._fill(self.unbound, unbound)
         if bound is None:
             self.summary.setText("Looking for saves…")
         elif bound:
             self.summary.setText(
-                f"{len(bound)} game(s) belong to this playset, newest first. "
-                "Open a game to see its saves. Right-click to move or unbind it."
+                f"{len(bound)} save(s) belong to this playset, newest first. "
+                "Open a save to see its files. Right-click to move or unbind it."
             )
         else:
             self.summary.setText(
-                "No games belong to this playset yet. Bind one from the unbound games below."
+                "No saves belong to this playset yet. Bind one from the unbound saves below."
             )
         self.unbound_label.setText(
-            f"Unbound games ({len(unbound)}): played with no playset, or unbound by you."
+            f"Unbound saves ({len(unbound)}): played with no playset, or unbound by you."
             if unbound
-            else "Unbound games: none."
+            else "Unbound saves: none."
         )
         self._unbound_selected()
 
-    def _fill(self, tree: QTreeWidget, games: Sequence[SavedGame]) -> None:
+    def _fill(self, tree: QTreeWidget, saves: Sequence[Save]) -> None:
+        """One row per save, opening into its files."""
         selected = {i.data(0, FOLDER_ROLE) for i in tree.selectedItems()}
         items = [tree.topLevelItem(row) for row in range(tree.topLevelItemCount())]
         expanded = {i.data(0, FOLDER_ROLE) for i in items if i is not None and i.isExpanded()}
         tree.clear()
-        for game in games:
-            newest = game.newest
-            info = game.info
+        for save in saves:
+            newest = save.newest
             item = QTreeWidgetItem(
                 tree,
                 [
-                    game.empire,
+                    save.empire,
                     newest.info.date if newest.info else "",
-                    saved_text(game.saved),
+                    saved_text(save.saved),
                     _version(newest),
-                    _where(game.saves),
+                    _where(save.files),
                 ],
             )
-            item.setData(0, FOLDER_ROLE, game.folder)
-            tip = f"Folder: {game.folder}" if info else "No save of this game could be read"
-            item.setToolTip(0, f"{game.empire}\n{tip}")
-            for save in game.saves:
+            item.setData(0, FOLDER_ROLE, save.folder)
+            where = f"Folder: {save.folder}" if save.info else "None of its files could be read"
+            item.setToolTip(0, f"{save.empire}\n{where}")
+            for file in save.files:
                 child = QTreeWidgetItem(
                     item,
                     [
-                        save.name,
-                        save.info.date if save.info else "",
-                        saved_text(save.saved),
-                        _version(save),
-                        CLOUD if save.cloud else LOCAL,
+                        file.name,
+                        file.info.date if file.info else "",
+                        saved_text(file.saved),
+                        _version(file),
+                        CLOUD if file.cloud else LOCAL,
                     ],
                 )
-                child.setToolTip(0, f"{save.path}\n{save.problem}".strip())
+                child.setToolTip(0, f"{file.path}\n{file.problem}".strip())
                 child.setFlags(child.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            item.setSelected(game.folder in selected)
-            item.setExpanded(game.folder in expanded)
+            item.setSelected(save.folder in selected)
+            item.setExpanded(save.folder in expanded)
 
     def _folders(self, tree: QTreeWidget) -> tuple[str, ...]:
         return tuple(i.data(0, FOLDER_ROLE) for i in tree.selectedItems())
@@ -194,7 +194,7 @@ class GamesDialog(QDialog):
         menu.exec(tree.viewport().mapToGlobal(pos))
 
     def menu_for(self, tree: QTreeWidget, folders: tuple[str, ...]) -> QMenu:
-        """The right-click menu for these games. Kept apart so tests can use it."""
+        """The right-click menu for these saves. Kept apart so tests can use it."""
         menu = QMenu(self)
         bound = tree is self.bound
         target = menu.addMenu("Move to playset" if bound else "Bind to playset")
@@ -208,6 +208,6 @@ class GamesDialog(QDialog):
         target.setEnabled(not target.isEmpty())
         if bound:
             unbind = menu.addAction("Unbind")
-            unbind.setToolTip("The game stays on disk. It isn't suggested for a playset again")
+            unbind.setToolTip("The save stays on disk. It isn't suggested for a playset again")
             unbind.triggered.connect(lambda: self.unbind_requested.emit(folders))
         return menu
