@@ -129,6 +129,18 @@ def load_record(root: Path, playset_id: str) -> BuildRecord | None:
     return load_json(root / f"{playset_id}.json", BuildRecord)
 
 
+class BuildStamp(msgspec.Struct):
+    """When a build was made, and the playset that plays it. Read alone, so
+    the record's file list, which can be megabytes, is skipped."""
+
+    built: str = ""
+    built_playset: str = ""
+
+
+def load_stamp(root: Path, playset_id: str) -> BuildStamp | None:
+    return load_json(root / f"{playset_id}.json", BuildStamp)
+
+
 def save_record(root: Path, record: BuildRecord) -> None:
     save_json(root / f"{record.playset}.json", record)
 

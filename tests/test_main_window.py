@@ -15,7 +15,7 @@ from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
 from cold_steel.ui.saves_dialog import FOLDER_ROLE, SavesDialog
-from conftest import SampleInstall
+from conftest import SampleInstall, make_save
 
 
 def test_window_opens_and_closes(qtbot: QtBot) -> None:
@@ -823,7 +823,10 @@ def test_delete_the_patch_mod(
     assert "Main Playset" in asked[0] and folder.is_dir()
 
     answer = True
-    with qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000):
+    with (
+        qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.library_shown, timeout=20_000),  # the rescan after
+    ):
         clashing.delete_patch_action.trigger()
 
     # The patch, its link and its place in the playset are gone. The choice stays.
@@ -1250,7 +1253,7 @@ def test_bind_a_save_in_the_saves_window(qtbot: QtBot, window: MainWindow) -> No
     assert une is not None
     text = row_text(une)
     assert text[0:2] == ["United Nations of Earth", "2201.01.26"]
-    assert text[3:] == ["v4.5.2", "Local and Steam Cloud"]
+    assert text[3:] == ["v4.5.2", "Local and Steam Cloud", ""]  # suggested for none
     assert [row_text(une.child(i))[0::4] for i in range(une.childCount())] == [
         ["2201.01.26", "Local"],
         ["autosave_2201.01.01", "Steam Cloud"],
@@ -1320,3 +1323,71 @@ def test_deleting_a_playset_unbinds_its_saves(
     assert "Its 2 saves are unbound" in asked[0]
     assert window.bindings.saves_of(main.id) == set()
     assert window.bindings.get(UNE) is None
+
+
+def test_a_new_save_after_play_is_bound_on_its_own(
+    qtbot: QtBot,
+    window: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Game:
+        exit_code: int | None = None
+
+        def poll(self) -> int | None:
+            return self.exit_code
+
+    game = Game()
+    monkeypatch.setattr(window, "launch", lambda *args: game)
+    monkeypatch.setattr(window, "confirm", lambda *args: True)  # Unsubscribed Mod is missing
+    window.playset_list.setCurrentRow(1)
+    window.play_action.trigger()
+
+    # The player starts a new campaign and saves once.
+    new = "newempire_42"
+    make_save(
+        sample_install.data_dir / f"save games/{new}/2200.02.01.sav",
+        'name="New Empire"\ndate="2200.02.01"\nmods={ "Alpha Interface" "My Local Tweaks" }\n',
+    )
+    game.exit_code = 0
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._check_game()
+
+    main = window.selected_playset()
+    assert main is not None and window.bindings is not None
+    assert window.bindings.playset_of(new) == main.id
+    # Older saves aren't bound by Play.
+    assert window.bindings.get(UNE) is None and window.bindings.get(ELVES) is None
+    assert window.saves_button.text() == "Saves (1)"
+    assert "New Empire" in window.statusBar().currentMessage()
+
+
+def test_suggestions_and_marks_in_the_saves_window(qtbot: QtBot, window: MainWindow) -> None:
+    assert window.book is not None and window.bindings is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    window.playset_list.setCurrentRow(1)
+    dialog = open_saves(qtbot, window)
+
+    # ELVES lists only Gamma Soundtrack, which is what Second Playset plays.
+    assert folders(dialog.unbound) == [UNE, ELVES]
+    elves = dialog.unbound.topLevelItem(1)
+    assert elves is not None and elves.text(5) == "Second Playset"
+    assert dialog.suggested_button.isEnabled()
+    dialog.suggested_button.click()
+    assert window.bindings.playset_of(ELVES) == second.id
+    assert not dialog.suggested_button.isEnabled()
+
+    # UNE was made with Alpha and Beta; Main Playset plays Alpha and My Local.
+    window.bind_saves([UNE], main.id)
+    une = dialog.bound.topLevelItem(0)
+    assert une is not None
+    assert une.text(5) == "⚠ Mods differ"
+    assert une.toolTip(5) == "Added since: My Local Tweaks\nRemoved since: Beta Ships"
+    assert "1 is marked ⚠" in dialog.summary.text()
+    assert window.saves_label.isVisible()
+    assert "United Nations of Earth" in window.saves_label.text()
+
+    window.playset_list.setCurrentRow(2)  # Second Playset: ELVES matches it
+    elves = dialog.bound.topLevelItem(0)
+    assert elves is not None and elves.text(5) == "✓"
+    assert not window.saves_label.isVisible()

@@ -2,17 +2,24 @@
 
 import os
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from cold_steel.core import saves as saves_module
 from cold_steel.core.jobs import Cancelled, JobContext
+from cold_steel.core.library import Scanner
 from cold_steel.core.saves import (
     BindingBook,
     Save,
+    SaveFile,
     SaveScanner,
     bound_saves,
+    check_save,
+    played_mods,
+    played_since,
+    suggest,
     unbound_saves,
 )
 from cold_steel.paradox.game import find_game
@@ -213,3 +220,70 @@ def test_saves_split_into_bound_and_unbound(sample_install: SampleInstall, tmp_p
     assert [s.folder for s in bound_saves(saves, book, "main")] == [ELVES]
     # A save bound to a playset that no longer exists counts as unbound.
     assert [s.folder for s in unbound_saves(saves, book, {"main"})] == [UNE]
+
+
+def test_played_mods_are_what_a_save_file_lists(sample_install: SampleInstall) -> None:
+    library = Scanner(*sample_install.scanner_args())(JobContext())
+    main = next(p for p in library.launcher_playsets if p.name == "Main Playset")
+    # Gamma is turned off, and Unsubscribed Mod isn't installed: the game loads neither.
+    assert played_mods(main, library) == ("Alpha Interface", "My Local Tweaks")
+
+
+def test_saves_written_since_play_with_no_binding(
+    sample_install: SampleInstall, tmp_path: Path
+) -> None:
+    saves = scan(sample_install)
+    book = BindingBook.open(tmp_path / "saves.json")
+    since = saves[1].saved + 1  # after ELVES's last file, before UNE's
+    assert played_since(saves, book, since) == [UNE]
+    book.bind([UNE], "other")
+    assert played_since(saves, book, since) == []  # already bound: left alone
+
+
+def test_a_save_is_suggested_for_the_one_playset_with_its_mods(
+    sample_install: SampleInstall, tmp_path: Path
+) -> None:
+    saves = scan(sample_install)
+    book = BindingBook.open(tmp_path / "saves.json")
+    played = {
+        "une": ("Alpha Interface", "Beta Ships"),
+        "elves": ("Gamma Soundtrack",),
+        "elves copy": ("Gamma Soundtrack",),
+        "reordered": ("Beta Ships", "Alpha Interface"),
+    }
+    # Two playsets match ELVES, so it gets no suggestion. Order counts.
+    assert suggest(saves, book, played) == {UNE: "une"}
+
+    book.unbind([UNE])  # by choice: never suggested again
+    assert suggest(saves, book, played) == {}
+    book.bind([UNE], "gone")  # bound to a playset that no longer exists
+    assert suggest(saves, book, played) == {UNE: "une"}
+
+
+def save_made_with(mods: tuple[str, ...], saved: int, version: str = "Cygnus v4.5.1") -> Save:
+    info = SaveInfo(empire="Test", date="2200.01.01", version=version, mods=mods)
+    return Save("test_1", (SaveFile(Path("test_1/2200.01.01.sav"), False, saved, info),))
+
+
+def test_a_save_is_compared_with_its_playset() -> None:
+    hour = 3600 * 10**9
+    save = save_made_with(("A", "B"), saved=1_791_000_000 * 10**9)
+
+    same = check_save(save, ("A", "B"), "v4.5.1")
+    assert same.marks == ()
+    changed = check_save(save, ("A", "C"), "v4.5.1")
+    assert changed.marks == ("Mods differ",)
+    assert changed.added == ("C",) and changed.removed == ("B",)
+    assert changed.details() == ["Added since: C", "Removed since: B"]
+    assert check_save(save, ("B", "A"), "v4.5.1").reordered
+
+    # Built at 2026-10-03 06:00 local time; the save was written before that.
+    built = datetime.fromtimestamp(save.saved / 1e9 + 3600).strftime("%Y-%m-%d %H:%M")
+    assert check_save(save, ("A", "B"), "v4.5.1", build=built).older_build
+    assert not check_save(save, ("A", "B"), "v4.5.1", build="").older_build  # kept
+    assert check_save(save, ("A", "B"), "v4.5.1", patch_written=save.saved + hour).patch_changed
+    assert not check_save(save, ("A", "B"), "v4.5.1", patch_written=save.saved - hour).marks
+
+    newer_game = check_save(save, ("A", "B"), "v4.6.0")
+    assert newer_game.marks == ("Older game",)
+    assert not check_save(save, ("A", "B"), "v4.5.9").older_game  # the patch number doesn't count
