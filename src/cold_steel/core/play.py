@@ -4,9 +4,11 @@ The game reads `dlc_load.json` as it starts, so writing that file is what
 makes a playset take effect. The game is started directly, not through Steam,
 so the Paradox launcher doesn't open. Steam must be running.
 
-Both point `continue_game.json` at the playset's newest save file, so the
-game's own Continue opens it. Continue also starts the game with
-`--continuelastsave`, which opens it at once, skipping the main menu.
+With local autosaves (decision 91), Play and Continue both point
+`continue_game.json` at one of the playset's save files, so the game's own
+Continue opens it: the newest, unless Continue was asked for another save.
+A playset with no saves leaves the file alone. Continue also starts the game
+with `--continuelastsave`, which opens it at once, skipping the main menu.
 
 With local autosaves, both first hide saves bound to other playsets from the
 game's Load menu (core/hide.py). They're put back when the game closes.

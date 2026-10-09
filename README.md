@@ -241,8 +241,9 @@ never downloads anything. It changes Paradox's files only when you ask:
   launcher's database. **Sync launcher** writes all of them, and removes the
   launcher's others.
 - **Generate patch mod**, **Build** and **Pins** add their own mods to the
-  game's `mod` folder, as links. Their names start with `cold_steel_`.
-  Deleting the playset removes them.
+  game's `mod` folder: the patch and the build as links, a pinned copy as a
+  `.mod` file. Their names start with `cold_steel_`. Deleting the playset
+  removes them.
 - **Delete local mod** moves a local mod's `.mod` file and folder to the
   trash, after asking.
 - **Build**, when it rebuilds, moves the local files of saves you let go to the
