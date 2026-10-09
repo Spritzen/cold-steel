@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -8,12 +9,18 @@ from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
 from pytestqt.qtbot import QtBot
 
 from cold_steel.core import playsets as ops
+from cold_steel.core.build import BuildError, BuildRecord
+from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Scanner
+from cold_steel.core.saves import Save
+from cold_steel.store.playsets import Playset
 from cold_steel.store.settings import Settings
+from cold_steel.ui import main_window as main_window_module
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
+from cold_steel.ui.rebuild_dialog import RebuildChoice
 from cold_steel.ui.saves_dialog import FOLDER_ROLE, SavesDialog
 from conftest import SampleInstall, make_save
 
@@ -1391,3 +1398,101 @@ def test_suggestions_and_marks_in_the_saves_window(qtbot: QtBot, window: MainWin
     elves = dialog.bound.topLevelItem(0)
     assert elves is not None and elves.text(5) == "✓"
     assert not window.saves_label.isVisible()
+
+
+def build(qtbot: QtBot, window: MainWindow) -> BuildRecord:
+    with (
+        qtbot.waitSignal(window.library_shown, timeout=20_000),
+        qtbot.waitSignal(window.build_finished, timeout=20_000) as finished,
+    ):
+        window.build_action.trigger()
+    record: BuildRecord = finished.args[0]
+    return record
+
+
+def built_playset(window: MainWindow) -> Playset:
+    assert window.book is not None
+    return next(p for p in window.book.playsets if p.name == "Main Playset (built)")
+
+
+def test_a_rebuild_asks_about_the_built_playsets_saves(
+    qtbot: QtBot,
+    clashing: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_install: SampleInstall,
+) -> None:
+    def no_question(*args: object) -> RebuildChoice | None:
+        raise AssertionError("asked with no saves to ask about")
+
+    monkeypatch.setattr(clashing, "ask_rebuild", no_question)
+    build(qtbot, clashing)  # a first build asks nothing
+    built = built_playset(clashing)
+    assert clashing.bindings is not None
+    clashing.bind_saves([UNE, ELVES], built.id)
+    clashing.playset_list.setCurrentRow(1)  # back to Main Playset
+
+    asked: list[tuple[str, list[str], str]] = []
+
+    def ask(playset: Playset, plays_it: Playset, saves: list[Save], changes: str) -> RebuildChoice:
+        asked.append((plays_it.name, [s.folder for s in saves], changes))
+        return RebuildChoice(frozenset({UNE, ELVES}), frozenset({UNE}), trash=True)
+
+    trashed: list[Path] = []
+
+    def trash(path: Path) -> bool:
+        trashed.append(path)
+        return True
+
+    monkeypatch.setattr(clashing, "ask_rebuild", ask)
+    monkeypatch.setattr(clashing, "trash", trash)
+    record = build(qtbot, clashing)
+
+    assert asked == [("Main Playset (built)", [UNE, ELVES], asked[0][2])]
+    assert asked[0][2].startswith("The same mods.")
+    une = clashing.bindings.get(UNE)
+    assert une is not None and une.playset == built.id and une.build == record.built
+    assert clashing.bindings.playset_of(ELVES) == ""  # not kept: unbound for good
+    assert trashed == [sample_install.data_dir / f"save games/{ELVES}"]
+
+
+def test_cancelling_the_rebuild_question_builds_nothing(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build(qtbot, clashing)
+    assert clashing.bindings is not None
+    clashing.bind_saves([UNE], built_playset(clashing).id)
+    clashing.playset_list.setCurrentRow(1)
+    before = clashing.bindings.get(UNE)
+
+    monkeypatch.setattr(clashing, "ask_rebuild", lambda *args: None)
+    clashing.build_action.trigger()
+    assert clashing._build_task is None
+    assert clashing.bindings.get(UNE) == before
+
+
+def test_a_failed_rebuild_changes_no_binding(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build(qtbot, clashing)
+    assert clashing.bindings is not None
+    clashing.bind_saves([UNE], built_playset(clashing).id)
+    clashing.playset_list.setCurrentRow(1)
+    before = clashing.bindings.get(UNE)
+
+    def failing_builder(*args: object) -> Callable[[JobContext], object]:
+        def job(ctx: JobContext) -> object:
+            raise BuildError("something is in the way")
+
+        return job
+
+    monkeypatch.setattr(main_window_module, "Builder", failing_builder)
+    monkeypatch.setattr(
+        clashing, "ask_rebuild", lambda *args: RebuildChoice(frozenset({UNE}), frozenset(), True)
+    )
+    told: list[str] = []
+    monkeypatch.setattr(clashing, "tell", lambda title, text: told.append(text))
+    with qtbot.waitSignal(clashing.build_finished, timeout=5_000, raising=False):
+        clashing.build_action.trigger()
+    qtbot.waitUntil(lambda: clashing._build_task is None, timeout=5_000)
+    assert "something is in the way" in told[0]
+    assert clashing.bindings.get(UNE) == before

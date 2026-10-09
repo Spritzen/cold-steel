@@ -106,6 +106,7 @@ from cold_steel.core.saves import (
     SaveScanner,
     bound_saves,
     check_save,
+    compare_mods,
     played_mods,
     played_since,
     suggest,
@@ -134,6 +135,7 @@ from cold_steel.core.sync import (
 from cold_steel.paradox import processes
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
+from cold_steel.paradox.save import local_save_dir
 from cold_steel.store import paths
 from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
@@ -149,6 +151,7 @@ from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column, ModFilter, ModTableModel
 from cold_steel.ui.pins_dialog import PinsDialog
+from cold_steel.ui.rebuild_dialog import RebuildChoice, RebuildDialog, describe_changes
 from cold_steel.ui.saves_dialog import SavesDialog
 from cold_steel.ui.settings_dialog import SettingsDialog
 from cold_steel.ui.tasks import Task, TaskRunner
@@ -259,6 +262,8 @@ class MainWindow(QMainWindow):
         # since are bound to it once the game closes.
         self._played: tuple[str, int] | None = None
         self._bind_played = False  # the next save scan does that binding
+        # What to do with the built playset's saves once the running build succeeds.
+        self._rebuild: RebuildChoice | None = None
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -1929,11 +1934,15 @@ class MainWindow(QMainWindow):
             )
         ):
             return
+        go, rebuild = self._ask_about_saves(playset)
+        if not go:
+            return
         builder = Builder(
             library, as_played(playset), self._index_cache, self._build_dir, self._index
         )
         task = self.tasks.start(builder)
         self._build_task = task
+        self._rebuild = rebuild
         task.progress.connect(self._show_progress)
         task.succeeded.connect(lambda result: self._built(result, playset))
         task.failed.connect(self._build_failed)
@@ -1951,6 +1960,8 @@ class MainWindow(QMainWindow):
             book.update(msgspec_replace(made, disabled_dlcs=playset.disabled_dlcs))
             record.built_playset = made.id
             save_record(self._build_dir, record)
+        if self._rebuild is not None:
+            self._apply_rebuild(record, self._rebuild)
         self.statusBar().showMessage(f"Built {playset.name} into one mod")
         self.build_finished.emit(record)
         self.rescan()  # finds the built mod
@@ -1964,7 +1975,58 @@ class MainWindow(QMainWindow):
 
     def _build_done(self) -> None:
         self._build_task = None
+        self._rebuild = None  # a failed or cancelled build changes no binding
         self.progress.hide()
+
+    def _ask_about_saves(self, playset: Playset) -> tuple[bool, RebuildChoice | None]:
+        """Before a rebuild, ask what to do with the saves bound to the built
+        playset (decision 85). Whether to build, and the answer if one was asked."""
+        library, book, bindings = self.library, self.book, self.bindings
+        stamp = load_stamp(self._build_dir, playset.id)
+        built = book.get(stamp.built_playset) if book and stamp and stamp.built_playset else None
+        if library is None or bindings is None or built is None:
+            return True, None
+        folders = bindings.saves_of(built.id)
+        if folders and self.saves is None:  # not read yet: from the cache, it takes a moment
+            self.saves = SaveScanner.for_game(library.game)(JobContext())
+        saves = [s for s in self.saves or () if s.folder in folders]
+        if not saves:
+            return True, None
+        record = load_record(self._build_dir, playset.id)
+        before = [record.names.get(k, k) for k in record.order] if record else []
+        changes = describe_changes(*compare_mods(before, played_mods(playset, library)))
+        choice = self.ask_rebuild(playset, built, saves, changes)
+        return choice is not None, choice
+
+    def _apply_rebuild(self, record: BuildRecord, choice: RebuildChoice) -> None:
+        """After a successful rebuild: keep the chosen saves with the new build,
+        unbind the rest, and trash their local files if asked."""
+        self._rebuild = None
+        bindings, library = self.bindings, self.library
+        if bindings is None or library is None:
+            return
+        # A bound save whose files are gone wasn't asked about. It stays, as kept.
+        dropped = sorted(choice.dropped)
+        bindings.keep(bindings.saves_of(record.built_playset) - choice.dropped, record.built)
+        if dropped:
+            bindings.unbind(dropped)
+        if choice.trash and dropped:
+            self._trash_saves(dropped, library.game.data_dir)
+        self._scan_saves()
+
+    def _trash_saves(self, folders: Sequence[str], data_dir: Path) -> None:
+        """Move these saves' local folders to the trash. Steam Cloud's stay."""
+        title = "Rebuild"
+        if processes.running(processes.GAME):
+            self.tell(title, "Stellaris is running, so no save files were moved to the trash.")
+            return
+        local = local_save_dir(data_dir)
+        failed = [
+            path for folder in folders if (path := local / folder).is_dir() and not self.trash(path)
+        ]
+        if failed:
+            listed = "\n".join(f"  {p}" for p in failed)
+            self.tell(title, f"These couldn't be moved to the trash:\n{listed}")
 
     def _delete_selected_build(self) -> None:
         if playset := self.selected_playset():
@@ -2040,6 +2102,20 @@ class MainWindow(QMainWindow):
             return None
         dialog = DlcDialog(self.library.dlcs, playset.disabled_dlcs, self)
         return dialog.disabled() if dialog.exec() else None
+
+    def ask_rebuild(
+        self, playset: Playset, built: Playset, saves: Sequence[Save], changes: str
+    ) -> RebuildChoice | None:
+        """Which saves to keep with the rebuilt playset, or None if cancelled."""
+        dialog = RebuildDialog(
+            playset.name,
+            built.name,
+            saves,
+            changes,
+            game_running=processes.running(processes.GAME),
+            parent=self,
+        )
+        return dialog.choice() if dialog.exec() else None
 
     def ask_settings(self) -> Settings | None:
         """The settings the user chose, or None if cancelled."""
