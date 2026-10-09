@@ -163,6 +163,8 @@ autosaves to Steam Cloud by default, and Cold Steel can't move those files.
 Until you turn them off in the game's settings, none of this shows.
 **Settings** says whether they're on.
 
+![The Saves window: a playset's saves, one open to show its files](screenshots/saves-dark.png)
+
 - **Saves…** lists the playset's saves, newest first. Open one to see its
   files, local and in Steam Cloud.
 - A save you start with **▶ Play** belongs to that playset when the game
@@ -202,7 +204,8 @@ Until you turn them off in the game's settings, none of this shows.
 
 **File › Settings** sets where Steam is, where Stellaris keeps its data, and
 the theme. By default Cold Steel follows your desktop's light or dark theme.
-It also shows where Cold Steel keeps its own files.
+It also shows whether the game's cloud autosaves are on, and where Cold
+Steel keeps its own files.
 
 ![The Settings window](screenshots/settings-dark.png)
 
