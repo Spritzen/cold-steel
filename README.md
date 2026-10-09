@@ -158,6 +158,11 @@ A save made with one set of mods can break when it's loaded with another, and
 the game only warns when a mod's name is missing. Cold Steel ties each save to
 the playset it belongs to, so it can tell you.
 
+**This needs the game's cloud autosaves turned off.** The game sends
+autosaves to Steam Cloud by default, and Cold Steel can't move those files.
+Until you turn them off in the game's settings, none of this shows.
+**Settings** says whether they're on.
+
 - **Saves…** lists the playset's saves, newest first. Open one to see its
   files, local and in Steam Cloud.
 - A save you start with **▶ Play** belongs to that playset when the game
@@ -172,9 +177,7 @@ the playset it belongs to, so it can tell you.
   Play points the game's own *Continue* at that save too.
 - **Play and Continue keep other playsets' saves out of the game's Load
   menu**, so you can't load one with the wrong mods. They're put back when
-  the game closes. Saves bound to no playset stay. This needs autosaves kept
-  locally: turn off cloud autosaves in the game's settings. Settings says
-  whether it's on.
+  the game closes. Saves bound to no playset stay.
 - **Build** on a playset that was built before asks what to do with the saves
   of the built playset: keep each one, or let it go. The local files of saves
   you let go are moved to the trash only if you tick that box.
@@ -228,8 +231,8 @@ never downloads anything. It changes Paradox's files only when you ask:
 
 - **Play** writes `dlc_load.json`, which tells the game what to load. For a mod
   the launcher hasn't seen yet, it also adds the `.mod` file the game needs.
-  It also writes `continue_game.json`, which names the save the game's
-  *Continue* opens.
+  With cloud autosaves off, it also writes `continue_game.json`, which names
+  the save the game's *Continue* opens.
 - **Play** and **Continue**, with cloud autosaves off, move the folders of
   other playsets' saves from `save games/` to `cold_steel_hidden_saves/`
   beside it while the game runs, then move them back. No file in them

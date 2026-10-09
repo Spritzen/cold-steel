@@ -1560,11 +1560,7 @@ def test_continuing_a_save_whose_mods_differ_asks_first(
     assert plan.continue_from.title == f"save games/{UNE}/2201.01.26"
 
 
-# Hiding other playsets' saves
-
-
-def local_autosaves(sample_install: SampleInstall) -> None:
-    (sample_install.data_dir / "settings.txt").write_text("autosave=4\nautosave_tocloud=no\n")
+# Hiding other playsets' saves. The sample install keeps autosaves local.
 
 
 def test_play_hides_other_playsets_saves_until_the_game_closes(
@@ -1579,7 +1575,6 @@ def test_play_hides_other_playsets_saves_until_the_game_closes(
 
     assert window.book is not None
     main, second = window.book.playsets[0], window.book.playsets[1]
-    local_autosaves(sample_install)
     saves = sample_install.data_dir / "save games"
     make_save(saves / "loose_1/2200.01.01.sav", 'name="Loose"\ndate="2200.01.01"\n')
     with qtbot.waitSignal(window.saves_found, timeout=10_000):
@@ -1624,7 +1619,7 @@ def test_play_hides_other_playsets_saves_until_the_game_closes(
     assert not (sample_install.data_dir / "cold_steel_hidden_saves").exists()
 
 
-def test_play_hides_nothing_while_autosaves_go_to_steam_cloud(
+def test_the_saves_features_are_off_while_autosaves_go_to_steam_cloud(
     qtbot: QtBot,
     window: MainWindow,
     sample_install: SampleInstall,
@@ -1633,14 +1628,39 @@ def test_play_hides_nothing_while_autosaves_go_to_steam_cloud(
     assert window.book is not None
     main = window.book.playsets[0]
     window.bind_saves([UNE], main.id)
+    window.playset_list.setCurrentRow(1)
+
+    def on() -> bool:  # read fresh each time, so mypy doesn't narrow it
+        return window.saves_on
+
+    assert on() and window.saves_button.isVisibleTo(window)
+
+    settings = sample_install.data_dir / "settings.txt"
+    settings.write_text("autosave_tocloud=yes\n")
     plans = played_with(window, monkeypatch)
-    window.playset_list.setCurrentRow(2)
-    window.play_action.trigger()  # no settings.txt: can't tell, so treated as cloud
-    (sample_install.data_dir / "settings.txt").write_text("autosave_tocloud=yes\n")
-    window.play_action.trigger()
-    local_autosaves(sample_install)
-    window.play_action.trigger()  # read again each time
-    assert [p.hide.folders if p.hide else () for p in plans] == [(), (), (UNE,)]
+    monkeypatch.setattr(window, "confirm", lambda *args: True)  # Main has a missing mod
+    window.play_action.trigger()  # read each time Play is pressed
+    (plan,) = plans
+    assert plan.hide is None and plan.continue_from is None and not plan.skip_menu
+    assert not on()
+    for widget in (window.saves_button, window.continue_button, window.saves_label):
+        assert not widget.isVisibleTo(window)
+    assert not window.saves_action.isVisible() and not window.continue_action.isVisible()
+    assert "save" not in window._saves_unbound_text(main)  # Delete doesn't mention them
+    window._scan_saves()
+    assert window._saves_task is None  # not even read
+
+    settings.unlink()  # can't tell: treated as cloud
+    window._read_saves_setting()
+    assert not on()
+
+    # Turned off in the game: back as soon as Cold Steel notices, and read again.
+    settings.write_text("autosave_tocloud=no\n")
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        monkeypatch.setattr(window, "ask_settings", lambda: None)
+        window.edit_settings()
+    assert on() and window.saves_button.text() == "Saves (1)"
+    assert window.continue_button.isVisibleTo(window)
 
 
 def test_saves_left_hidden_come_back_when_cold_steel_starts(
@@ -1677,23 +1697,22 @@ def test_saves_left_hidden_come_back_when_cold_steel_starts(
     assert not win._game_timer.isActive()
 
 
-def test_settings_say_whether_saves_are_hidden(qtbot: QtBot) -> None:
+def test_settings_show_whether_autosaves_go_to_steam_cloud(qtbot: QtBot) -> None:
     from cold_steel.ui.settings_dialog import SettingsDialog
 
     def shown(cloud: bool | None) -> tuple[str, bool]:
         dialog = SettingsDialog(Settings(), None, game_found=True, cloud_autosaves=cloud)
         qtbot.addWidget(dialog)
-        return dialog.hiding.text(), dialog.hiding_hint.isVisibleTo(dialog)
+        return dialog.cloud.text(), dialog.cloud_hint.isVisibleTo(dialog)
 
-    on, hint = shown(False)
-    assert on.startswith("Hiding other playsets' saves: on") and not hint
-    off, hint = shown(True)
-    assert "sends autosaves to Steam Cloud" in off and hint
-    off, hint = shown(None)
-    assert "couldn't read the game's settings.txt" in off and hint
+    assert shown(False) == ("Off", False)
+    assert shown(True) == ("On", True)  # with a short hint on turning them off
+    text, hint = shown(None)
+    assert "settings.txt couldn't be read" in text and hint
     dialog = SettingsDialog(Settings(), None)  # no game found: nothing to say
     qtbot.addWidget(dialog)
-    assert not dialog.hiding.isVisibleTo(dialog)
+    assert not dialog.cloud.isVisibleTo(dialog)
+    assert "saves features" in dialog.cloud_hint.text()
 
 
 def saves_not_read_yet(qtbot: QtBot, window: MainWindow) -> None:
