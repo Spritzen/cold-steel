@@ -1,4 +1,4 @@
-"""Save games: what one `.sav` file says about itself, and where the game keeps
+"""Save files: what one `.sav` file says about itself, and where the game keeps
 them. See docs/reference/stellaris-files.md.
 
 A `.sav` is a zip holding `meta` (about 1 KB) and `gamestate` (megabytes).

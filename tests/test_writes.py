@@ -1,4 +1,5 @@
-"""Everything that writes a Paradox file: launcher export, dlc_load.json and Play.
+"""Everything that writes a Paradox file: launcher export, dlc_load.json,
+continue_game.json and Play.
 
 Each write must make a dated backup first, and write nothing if it can't
 (decision 6).

@@ -278,7 +278,7 @@ def test_a_save_is_compared_with_its_playset() -> None:
     assert changed.details() == ["Added since: C", "Removed since: B"]
     assert check_save(save, ("B", "A"), "v4.5.1").reordered
 
-    # Built at 2026-10-03 06:00 local time; the save was written before that.
+    # Built an hour after the save was written.
     built = datetime.fromtimestamp(save.saved / 1e9 + 3600).strftime("%Y-%m-%d %H:%M")
     assert check_save(save, ("A", "B"), "v4.5.1", build=built).older_build
     assert not check_save(save, ("A", "B"), "v4.5.1", build="").older_build  # kept
