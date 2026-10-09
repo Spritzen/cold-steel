@@ -4,12 +4,14 @@ import pytest
 from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
 from pytestqt.qtbot import QtBot
 
 from cold_steel.core import playsets as ops
 from cold_steel.core.library import Scanner
 from cold_steel.store.settings import Settings
 from cold_steel.ui.conflicts_window import ConflictsWindow
+from cold_steel.ui.games_dialog import FOLDER_ROLE, GamesDialog
 from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
@@ -1051,10 +1053,16 @@ def test_delete_a_built_mod(
         asked.append(text)
         return True
 
+    assert clashing.book is not None and clashing.bindings is not None
+    built = next(p for p in clashing.book.playsets if p.name == "Main Playset (built)")
+    clashing.bind_games([UNE], built.id)
+
     monkeypatch.setattr(clashing, "confirm", confirm)
     with qtbot.waitSignal(clashing.library_shown, timeout=20_000):
         clashing.delete_build_action.trigger()
     assert "Main Playset (built)" in asked[0]
+    assert "Its game is unbound" in asked[0]
+    assert clashing.bindings.get(UNE) is None
 
     # The build, its link and the playset that played it are gone; the playset stays.
     assert clashing.book is not None and clashing.library is not None
@@ -1202,3 +1210,113 @@ def test_hover_text_wraps_at_a_sensible_width(window: MainWindow) -> None:
     assert len(lines) > 4
     assert all(QFontMetrics(font).horizontalAdvance(line) <= width for line in lines)
     assert "".join(lines).replace(" ", "") == text.replace(" ", "").replace("\n", "")
+
+
+# Games
+
+UNE = "unitednationsofearth_-15512622"
+ELVES = "divineelvenorder_-1997250795"
+
+
+def open_games(qtbot: QtBot, window: MainWindow) -> GamesDialog:
+    """Open the Games window for the selected playset, once the saves are read."""
+    with qtbot.waitSignal(window.games_found, timeout=10_000):
+        window.games_action.trigger()
+    dialog = window._games_dialog
+    assert dialog is not None and dialog.isVisible()
+    return dialog
+
+
+def folders(tree: QTreeWidget) -> list[str]:
+    items = (tree.topLevelItem(row) for row in range(tree.topLevelItemCount()))
+    return [item.data(0, FOLDER_ROLE) for item in items if item is not None]
+
+
+def row_text(item: QTreeWidgetItem | None) -> list[str]:
+    assert item is not None
+    return [item.text(col) for col in range(item.columnCount())]
+
+
+def test_bind_a_game_in_the_games_window(qtbot: QtBot, window: MainWindow) -> None:
+    window.playset_list.setCurrentRow(1)
+    dialog = open_games(qtbot, window)
+    assert dialog.windowTitle() == "Games of Main Playset"
+    assert folders(dialog.bound) == []
+    assert "No games belong to this playset" in dialog.summary.text()
+
+    # Every game is unbound to start with, newest first, with its saves inside.
+    assert folders(dialog.unbound) == [UNE, ELVES]
+    une = dialog.unbound.topLevelItem(0)
+    assert une is not None
+    text = row_text(une)
+    assert text[0:2] == ["United Nations of Earth", "2201.01.26"]
+    assert text[3:] == ["v4.5.2", "Local and Steam Cloud"]
+    assert [row_text(une.child(i))[0::4] for i in range(une.childCount())] == [
+        ["2201.01.26", "Local"],
+        ["autosave_2201.01.01", "Steam Cloud"],
+    ]
+
+    assert not dialog.bind_button.isEnabled()
+    une.setSelected(True)
+    dialog.bind_button.click()
+    assert folders(dialog.bound) == [UNE]
+    assert folders(dialog.unbound) == [ELVES]
+    assert window.games_button.text() == "Games (1)"
+
+    # The window follows the playset chosen in the sidebar.
+    window.playset_list.setCurrentRow(2)
+    assert dialog.windowTitle() == "Games of Second Playset"
+    assert folders(dialog.bound) == []
+    assert window.games_button.text() == "Games"
+
+
+def test_move_and_unbind_a_game(qtbot: QtBot, window: MainWindow) -> None:
+    assert window.book is not None and window.bindings is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    window.playset_list.setCurrentRow(1)
+    dialog = open_games(qtbot, window)
+    window.bind_games([UNE, ELVES], main.id)
+    assert folders(dialog.bound) == [UNE, ELVES]
+
+    # Move offers every other playset.
+    menu = dialog.menu_for(dialog.bound, (ELVES,))
+    move = menu.findChild(QMenu)
+    assert move is not None and move.title() == "Move to playset"
+    assert [a.text() for a in move.actions()] == ["Second Playset"]
+    move.actions()[0].trigger()
+    assert folders(dialog.bound) == [UNE]
+    assert window.bindings.playset_of(ELVES) == second.id
+
+    unbind = next(
+        a for a in dialog.menu_for(dialog.bound, (UNE,)).actions() if a.text() == "Unbind"
+    )
+    unbind.trigger()
+    assert folders(dialog.bound) == []
+    assert folders(dialog.unbound) == [UNE]  # ELVES is Second Playset's
+    assert window.bindings.playset_of(UNE) == ""
+
+    # An unbound game can be bound to any playset from its menu.
+    bind = dialog.menu_for(dialog.unbound, (UNE,)).findChild(QMenu)
+    assert bind is not None and bind.title() == "Bind to playset"
+    assert [a.text() for a in bind.actions()] == ["Main Playset", "Second Playset"]
+
+
+def test_deleting_a_playset_unbinds_its_games(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert window.book is not None and window.bindings is not None
+    main = window.book.playsets[0]
+    window.bind_games([UNE, ELVES], main.id)
+    asked: list[str] = []
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return True
+
+    monkeypatch.setattr(window, "confirm", confirm)
+
+    window.playset_list.setCurrentRow(1)
+    window.delete_action.trigger()
+    assert "Its 2 game(s) are unbound" in asked[0]
+    assert window.bindings.games_of(main.id) == set()
+    assert window.bindings.get(UNE) is None

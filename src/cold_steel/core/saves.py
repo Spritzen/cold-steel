@@ -1,6 +1,8 @@
-"""The save scan job: every game in the save folders, and what each save says.
+"""Save games: the scan job that finds them, and which playset each belongs to.
 
     games = SaveScanner.for_game(game)(ctx)
+    book = BindingBook.open(path)
+    book.bind(["commonwealthofman_1251622081"], playset.id)
 
 A game is one folder, `<empire>_<number>`, in the local `save games/` folder,
 in Steam Cloud's, or in both (decision 80). Each save's `meta` is read once,
@@ -9,7 +11,9 @@ is written.
 """
 
 import os
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import msgspec
@@ -26,6 +30,7 @@ from cold_steel.paradox.save import (
 )
 from cold_steel.store import paths
 from cold_steel.store.files import load_msgpack, save_msgpack
+from cold_steel.store.saves import Binding, BindingsFile, load_bindings, save_bindings
 
 # Bump when SaveInfo or CachedSave change shape, so old caches are thrown away.
 CACHE_VERSION = 1
@@ -152,3 +157,75 @@ def _read(path: Path, stamp: Stamp) -> CachedSave:
         return CachedSave(stamp, read_save_info(path))
     except SaveError as error:
         return CachedSave(stamp, None, str(error))
+
+
+class BindingBook:
+    """Which playset each game belongs to, by game folder. Every change is saved at once."""
+
+    def __init__(self, data: BindingsFile, path: Path) -> None:
+        self._data = data
+        self._path = path
+        self.problems: list[str] = []
+
+    @classmethod
+    def open(cls, path: Path) -> BindingBook:
+        """A file that exists but can't be read is renamed, not overwritten."""
+        data = load_bindings(path)
+        problems: list[str] = []
+        if data is None and path.exists():
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            kept = path.with_name(f"{path.stem}.unreadable-{stamp}{path.suffix}")
+            path.replace(kept)
+            problems.append(f"Your games file couldn't be read. It was kept as {kept.name}.")
+        book = cls(data or BindingsFile(), path)
+        book.problems = problems
+        return book
+
+    def get(self, folder: str) -> Binding | None:
+        return self._data.games.get(folder)
+
+    def playset_of(self, folder: str) -> str:
+        """The id of the playset the game belongs to, or "" if none."""
+        binding = self._data.games.get(folder)
+        return binding.playset if binding else ""
+
+    def games_of(self, playset_id: str) -> set[str]:
+        return {f for f, b in self._data.games.items() if playset_id and b.playset == playset_id}
+
+    def bind(self, folders: Iterable[str], playset_id: str) -> None:
+        """Bind games to a playset, or move them to it from another."""
+        bound = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for folder in folders:
+            self._data.games[folder] = Binding(playset=playset_id, bound=bound)
+        self._save()
+
+    def unbind(self, folders: Iterable[str]) -> None:
+        """Unbind games by choice. They're never suggested for a playset again."""
+        for folder in folders:
+            self._data.games[folder] = Binding()
+        self._save()
+
+    def forget_playset(self, playset_id: str) -> int:
+        """The playset is gone: its games belong to none, and may be suggested
+        for another. How many games it had."""
+        gone = self.games_of(playset_id)
+        for folder in gone:
+            del self._data.games[folder]
+        if gone:
+            self._save()
+        return len(gone)
+
+    def _save(self) -> None:
+        save_bindings(self._data, self._path)
+
+
+def bound_games(games: Iterable[SavedGame], book: BindingBook, playset_id: str) -> list[SavedGame]:
+    """The games bound to a playset, newest first."""
+    return [g for g in games if book.playset_of(g.folder) == playset_id]
+
+
+def unbound_games(
+    games: Iterable[SavedGame], book: BindingBook, playset_ids: Collection[str]
+) -> list[SavedGame]:
+    """The games bound to no playset that exists, newest first."""
+    return [g for g in games if book.playset_of(g.folder) not in playset_ids]
