@@ -4,14 +4,19 @@ The game reads `dlc_load.json` as it starts, so writing that file is what
 makes a playset take effect. The game is started directly, not through Steam,
 so the Paradox launcher doesn't open. Steam must be running.
 
-Continue does the same, then has the game open one save file instead of its
-main menu: `continue_game.json` names it, and `--continuelastsave` opens it.
+Both point `continue_game.json` at the playset's newest save file, so the
+game's own Continue opens it. Continue also starts the game with
+`--continuelastsave`, which opens it at once, skipping the main menu.
+
+With local autosaves, both first hide saves bound to other playsets from the
+game's Load menu (core/hide.py). They're put back when the game closes.
 """
 
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cold_steel.core.hide import hidden_dir, hide, restore
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
 from cold_steel.paradox import processes
@@ -19,6 +24,7 @@ from cold_steel.paradox.continue_game import CONTINUE_ARG, ContinueGame, write_c
 from cold_steel.paradox.descriptor import Descriptor, format_descriptor
 from cold_steel.paradox.dlc_load import DlcLoad, write_dlc_load
 from cold_steel.paradox.game import Game
+from cold_steel.paradox.save import local_save_dir
 from cold_steel.store.playsets import Playset
 
 
@@ -27,12 +33,21 @@ class PlayError(Exception):
 
 
 @dataclass(frozen=True)
+class HidePlan:
+    folders: tuple[str, ...]  # the saves to hide, by folder
+    record: Path  # hidden.json, the list of what's hidden
+
+
+@dataclass(frozen=True)
 class PlayPlan:
     load: DlcLoad
     # mod/*.mod files the game needs but that don't exist yet: path -> text
     new_descriptors: dict[Path, str] = field(default_factory=dict)
     skipped: tuple[str, ...] = ()  # names of turned-on mods that aren't installed
-    continue_from: ContinueGame | None = None  # the save file to open, for Continue
+    # The save file to write to continue_game.json: the one the game's own Continue opens.
+    continue_from: ContinueGame | None = None
+    skip_menu: bool = False  # open it at once, skipping the main menu: Continue
+    hide: HidePlan | None = None  # saves of other playsets, kept out of the Load menu
 
 
 def plan_play(playset: Playset, library: Library) -> PlayPlan:
@@ -73,7 +88,17 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
     if not game.exe.is_file():
         raise PlayError(f"The game program isn't there: {game.exe}")
     write_plan(plan, game, backup_dir)
-    extra = (CONTINUE_ARG,) if plan.continue_from else ()
+    if plan.hide is not None:
+        try:
+            hide(
+                plan.hide.folders,
+                local_save_dir(game.data_dir),
+                hidden_dir(game.data_dir),
+                plan.hide.record,
+            )
+        except OSError as error:
+            raise PlayError(f"Couldn't hide other playsets' saves: {error}") from error
+    extra = (CONTINUE_ARG,) if plan.continue_from and plan.skip_menu else ()
     try:
         # Its own session, so closing Cold Steel doesn't close the game.
         return subprocess.Popen(
@@ -85,12 +110,14 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
             start_new_session=True,
         )
     except OSError as error:
+        if plan.hide is not None:
+            restore(plan.hide.record)
         raise PlayError(f"Couldn't start {game.exe}: {error}") from error
 
 
 def write_plan(plan: PlayPlan, game: Game, backup_dir: Path) -> None:
     """Add any missing mod/*.mod files, then write dlc_load.json after a backup,
-    and continue_game.json too for Continue."""
+    and continue_game.json too when the plan names a save file."""
     for path, text in plan.new_descriptors.items():
         if not path.exists():  # only ever add a missing one, never overwrite
             path.parent.mkdir(parents=True, exist_ok=True)

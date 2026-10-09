@@ -1,5 +1,5 @@
-"""Settings: where Steam and the game's data are, the theme, and where Cold Steel
-keeps its own files."""
+"""Settings: where Steam and the game's data are, whether Play hides other
+playsets' saves, the theme, and where Cold Steel keeps its own files."""
 
 from pathlib import Path
 
@@ -27,10 +27,33 @@ from cold_steel.store.settings import Settings
 
 THEMES = (("Follow the system", "system"), ("Light", "light"), ("Dark", "dark"))
 
+HIDING_ON = (
+    "Hiding other playsets' saves: on. Play shows only the playset's own saves, "
+    "and saves bound to no playset, in the game's Load menu."
+)
+HIDING_OFF = {
+    True: "Hiding other playsets' saves: off. Stellaris sends autosaves to Steam Cloud, "
+    "which Cold Steel can't move.",
+    None: "Hiding other playsets' saves: off. Cold Steel couldn't read the game's "
+    "settings.txt, so it treats autosaves as going to Steam Cloud, which it can't move.",
+}
+HOW_TO_HIDE = (
+    "To turn it on, turn off cloud autosaves in the game's settings, or set "
+    "autosave_tocloud=no in its settings.txt while the game is closed. Autosaves "
+    "already in Steam Cloud stay there and still show in the Load menu: delete them "
+    "from the Load menu, or leave them."
+)
+
 
 class SettingsDialog(QDialog):
     def __init__(
-        self, settings: Settings, found_data_dir: Path | None, parent: QWidget | None = None
+        self,
+        settings: Settings,
+        found_data_dir: Path | None,
+        parent: QWidget | None = None,
+        *,
+        game_found: bool = False,
+        cloud_autosaves: bool | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -57,6 +80,13 @@ class SettingsDialog(QDialog):
         game.addRow("", _hint("Only needed when Steam is a Flatpak or Snap, or somewhere unusual."))
         game.addRow("Stellaris data folder:", data_row)
         game.addRow("", _hint("Leave empty to use the folder the game names. Holds mod and logs."))
+        self.hiding = QLabel(HIDING_OFF.get(cloud_autosaves, HIDING_ON), wordWrap=True)
+        self.hiding_hint = _hint(HOW_TO_HIDE)
+        self.hiding_hint.setWordWrap(True)
+        if game_found:
+            game.addRow("Saves:", self.hiding)
+            if cloud_autosaves is not False:
+                game.addRow("", self.hiding_hint)
         game_box = QGroupBox("Stellaris")
         game_box.setLayout(game)
 

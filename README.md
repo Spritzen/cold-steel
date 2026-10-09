@@ -169,6 +169,12 @@ the playset it belongs to, so it can tell you.
   Hover over the mark to see why.
 - **Continue**, beside Play, plays the playset and opens its newest save,
   skipping the game's main menu. It asks first if the save is marked ⚠.
+  Play points the game's own *Continue* at that save too.
+- **Play and Continue keep other playsets' saves out of the game's Load
+  menu**, so you can't load one with the wrong mods. They're put back when
+  the game closes. Saves bound to no playset stay. This needs autosaves kept
+  locally: turn off cloud autosaves in the game's settings. Settings says
+  whether it's on.
 - **Build** on a playset that was built before asks what to do with the saves
   of the built playset: keep each one, or let it go. The local files of saves
   you let go are moved to the trash only if you tick that box.
@@ -222,7 +228,12 @@ never downloads anything. It changes Paradox's files only when you ask:
 
 - **Play** writes `dlc_load.json`, which tells the game what to load. For a mod
   the launcher hasn't seen yet, it also adds the `.mod` file the game needs.
-  **Continue** also writes `continue_game.json`, which names the save to open.
+  It also writes `continue_game.json`, which names the save the game's
+  *Continue* opens.
+- **Play** and **Continue**, with cloud autosaves off, move the folders of
+  other playsets' saves from `save games/` to `cold_steel_hidden_saves/`
+  beside it while the game runs, then move them back. No file in them
+  changes. If Cold Steel closes first, it moves them back when it next starts.
 - **Export to launcher** and **Open in launcher** write the playset into the
   launcher's database. **Sync launcher** writes all of them, and removes the
   launcher's others.

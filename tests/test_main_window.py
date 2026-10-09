@@ -1538,7 +1538,7 @@ def test_continuing_a_save_whose_mods_differ_asks_first(
     assert window.book is not None
     second = window.book.playsets[1]
     window.playset_list.setCurrentRow(2)
-    dialog = open_saves(qtbot, window)
+    open_saves(qtbot, window)  # reads the saves
     window.bind_saves([UNE], second.id)  # made with Alpha and Beta; Second plays Gamma
     plans = played_with(window, monkeypatch)
     asked: list[str] = []
@@ -1553,15 +1553,147 @@ def test_continuing_a_save_whose_mods_differ_asks_first(
     assert "is marked: Mods differ" in asked[0] and "Removed since: Alpha Interface" in asked[0]
     assert plans == []
 
-    # Continue from one file: its autosave in Steam Cloud.
     answer = True
-    autosave = window.saves[0].files[1] if window.saves else None
-    assert autosave is not None and autosave.cloud
-    menu = dialog.file_menu(UNE, str(autosave.path))
-    menu.actions()[0].trigger()
+    window.continue_action.trigger()
     (plan,) = plans
-    assert plan.continue_from is not None
-    assert plan.continue_from.title == f"save games/{UNE}/autosave_2201.01.01"
+    assert plan.continue_from is not None and plan.skip_menu
+    assert plan.continue_from.title == f"save games/{UNE}/2201.01.26"
+
+
+# Hiding other playsets' saves
+
+
+def local_autosaves(sample_install: SampleInstall) -> None:
+    (sample_install.data_dir / "settings.txt").write_text("autosave=4\nautosave_tocloud=no\n")
+
+
+def test_play_hides_other_playsets_saves_until_the_game_closes(
+    qtbot: QtBot,
+    window: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    from cold_steel.paradox import processes
+
+    assert window.book is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    local_autosaves(sample_install)
+    saves = sample_install.data_dir / "save games"
+    make_save(saves / "loose_1/2200.01.01.sav", 'name="Loose"\ndate="2200.01.01"\n')
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._scan_saves()
+    window.bind_saves([UNE], main.id)
+    window.bind_saves([ELVES], second.id)
+
+    class Game:
+        exit_code: int | None = None
+
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            self.args = args
+
+        def poll(self) -> int | None:
+            return self.exit_code
+
+    started: list[Game] = []
+
+    def popen(args: list[str], **kwargs: object) -> Game:
+        assert not (saves / UNE).exists()  # hidden before the game starts
+        started.append(Game(args))
+        return started[-1]
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    window.library.game.exe.write_text("#!/bin/sh\n")  # type: ignore[union-attr]
+    window.playset_list.setCurrentRow(2)  # Second Playset
+    window.play_action.trigger()
+    (game,) = started
+    assert "1 save(s) of other playsets are hidden" in window.statusBar().currentMessage()
+    # Its own save, and the one bound to no playset, stay in the Load menu.
+    assert (saves / ELVES).is_dir() and (saves / "loose_1").is_dir()
+    # The game's own Continue points at this playset's newest save, but Play shows the menu.
+    continue_game = (sample_install.data_dir / "continue_game.json").read_text()
+    assert f"save games/{ELVES}/2200.01.01" in continue_game
+    assert "--continuelastsave" not in game.args
+
+    game.exit_code = 0
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._check_game()
+    assert (saves / UNE / "2201.01.26.sav").is_file()
+    assert not (sample_install.data_dir / "cold_steel_hidden_saves").exists()
+
+
+def test_play_hides_nothing_while_autosaves_go_to_steam_cloud(
+    qtbot: QtBot,
+    window: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert window.book is not None
+    main = window.book.playsets[0]
+    window.bind_saves([UNE], main.id)
+    plans = played_with(window, monkeypatch)
+    window.playset_list.setCurrentRow(2)
+    window.play_action.trigger()  # no settings.txt: can't tell, so treated as cloud
+    (sample_install.data_dir / "settings.txt").write_text("autosave_tocloud=yes\n")
+    window.play_action.trigger()
+    local_autosaves(sample_install)
+    window.play_action.trigger()  # read again each time
+    assert [p.hide.folders if p.hide else () for p in plans] == [(), (), (UNE,)]
+
+
+def test_saves_left_hidden_come_back_when_cold_steel_starts(
+    qtbot: QtBot,
+    sample_install: SampleInstall,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cold_steel.core.hide import hidden_dir, hidden_file, hide
+    from cold_steel.paradox import processes
+
+    data = sample_install.data_dir
+    hide([UNE], data / "save games", hidden_dir(data), hidden_file())  # then Cold Steel crashed
+    game_running = True
+    monkeypatch.setattr(
+        processes, "running", lambda names: game_running and names == processes.GAME
+    )
+    win = MainWindow(
+        Scanner(*sample_install.scanner_args()),
+        tmp_path / "thumbnails",
+        playsets_path=tmp_path / "data/playsets.json",
+        backup_dir=tmp_path / "data/backups",
+    )
+    qtbot.addWidget(win)
+    with qtbot.waitSignal(win.library_shown, timeout=10_000):
+        win.show()
+    assert not (data / "save games" / UNE).exists()  # the game still runs: they wait
+    assert win._game_timer.isActive()
+
+    game_running = False
+    with qtbot.waitSignal(win.saves_found, timeout=10_000):
+        win._check_game()
+    assert (data / "save games" / UNE / "2201.01.26.sav").is_file()
+    assert not win._game_timer.isActive()
+
+
+def test_settings_say_whether_saves_are_hidden(qtbot: QtBot) -> None:
+    from cold_steel.ui.settings_dialog import SettingsDialog
+
+    def shown(cloud: bool | None) -> tuple[str, bool]:
+        dialog = SettingsDialog(Settings(), None, game_found=True, cloud_autosaves=cloud)
+        qtbot.addWidget(dialog)
+        return dialog.hiding.text(), dialog.hiding_hint.isVisibleTo(dialog)
+
+    on, hint = shown(False)
+    assert on.startswith("Hiding other playsets' saves: on") and not hint
+    off, hint = shown(True)
+    assert "sends autosaves to Steam Cloud" in off and hint
+    off, hint = shown(None)
+    assert "couldn't read the game's settings.txt" in off and hint
+    dialog = SettingsDialog(Settings(), None)  # no game found: nothing to say
+    qtbot.addWidget(dialog)
+    assert not dialog.hiding.isVisibleTo(dialog)
 
 
 def saves_not_read_yet(qtbot: QtBot, window: MainWindow) -> None:

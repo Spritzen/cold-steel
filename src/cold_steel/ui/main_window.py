@@ -77,6 +77,7 @@ from cold_steel.core.build import (
 from cold_steel.core.conflicts import ConflictFinder, Found
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
+from cold_steel.core.hide import hidden_file, hidden_now, restore
 from cold_steel.core.index import GAME, Index, Indexer
 from cold_steel.core.jobs import Job, JobContext
 from cold_steel.core.library import Library
@@ -97,7 +98,7 @@ from cold_steel.core.patch import (
     with_patch_last,
     write_patch,
 )
-from cold_steel.core.play import PlayError, PlayPlan, plan_play, play
+from cold_steel.core.play import HidePlan, PlayError, PlayPlan, plan_play, play
 from cold_steel.core.playsets import PlaysetBook, as_played, missing_mods
 from cold_steel.core.resolve import ResolutionBook, choices_digest, copy_resolutions
 from cold_steel.core.saves import (
@@ -137,7 +138,7 @@ from cold_steel.paradox import processes
 from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
-from cold_steel.paradox.save import local_save_dir
+from cold_steel.paradox.save import autosaves_to_cloud, local_save_dir
 from cold_steel.store import paths
 from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
@@ -218,6 +219,7 @@ class MainWindow(QMainWindow):
         snapshot_dir: Path | None = None,
         build_dir: Path | None = None,
         saves_path: Path | None = None,
+        hidden_path: Path | None = None,
         settings: Settings | None = None,
     ) -> None:
         super().__init__(parent)
@@ -264,6 +266,11 @@ class MainWindow(QMainWindow):
         # since are bound to it once the game closes.
         self._played: tuple[str, int] | None = None
         self._bind_played = False  # the next save scan does that binding
+        # hidden.json: the saves of other playsets that Play hid from the game.
+        self._hidden_path = hidden_path or hidden_file()
+        # Saves were left hidden by an earlier run while the game was running:
+        # they're put back once it closes.
+        self._restore_waiting = False
         # What to do with the built playset's saves once the running build succeeds.
         self._rebuild: RebuildChoice | None = None
         # The playset whose Build waits for the saves to be read, to ask about them.
@@ -619,6 +626,7 @@ class MainWindow(QMainWindow):
                 problems.append(f"Your saves couldn't be loaded: {error}")
             else:
                 problems += self.bindings.problems
+            self._put_back_saves()  # left hidden if Cold Steel closed while the game ran
         playsets = self.book.playsets if self.book else ()
         self.model.set_library(library, missing_mods(playsets, library))
         self.filter.set_playsets(playsets)
@@ -1358,9 +1366,9 @@ class MainWindow(QMainWindow):
     def play(self) -> None:
         self._play(None)
 
-    def continue_playset(self, folder: str = "", path: str = "") -> None:
-        """Play the selected playset and open one of its saves, skipping the
-        game's main menu. By default its newest save, at its newest file."""
+    def continue_playset(self, folder: str = "") -> None:
+        """Play the selected playset and open one of its saves at its newest
+        file, skipping the game's main menu. By default its newest save."""
         playset, bindings = self.selected_playset(), self.bindings
         if playset is None or bindings is None:
             return
@@ -1369,9 +1377,6 @@ class MainWindow(QMainWindow):
         save = save or (bound[0] if bound else None)
         if save is None:
             return
-        readable = [f for f in save.files if f.info]
-        file = next((f for f in save.files if str(f.path) == path), None) if path else None
-        file = file or (readable[0] if readable else save.newest)
         check = self._check_saves(playset, [save]).get(save.folder)
         if (
             check
@@ -1384,16 +1389,23 @@ class MainWindow(QMainWindow):
             )
         ):
             return
-        date = file.info.date if file.info else ""
-        self._play(ContinueGame(save.folder, file.name, save.empire, date))
+        self._play(_continue_game(save), skip_menu=True)
 
-    def _play(self, continue_from: ContinueGame | None) -> None:
+    def _play(self, continue_from: ContinueGame | None, *, skip_menu: bool = False) -> None:
+        """Play the selected playset, with the game's Continue pointing at
+        `continue_from`, or at the playset's newest save. `skip_menu` opens it."""
         playset = self.selected_playset()
         if playset is None or self.book is None or self.library is None:
             return
-        plan = plan_play(as_played(playset), self.library)
-        if continue_from is not None:
-            plan = dataclass_replace(plan, continue_from=continue_from)
+        if continue_from is None and self.bindings is not None:
+            bound = bound_saves(self.saves or (), self.bindings, playset.id)
+            continue_from = _continue_game(bound[0]) if bound else None
+        plan = dataclass_replace(
+            plan_play(as_played(playset), self.library),
+            continue_from=continue_from,
+            skip_menu=skip_menu and continue_from is not None,
+            hide=self._hide_plan(playset),
+        )
         if plan.skipped and not self.confirm(
             "Some mods aren't installed",
             "These mods aren't installed, so the game won't load them:\n"
@@ -1410,11 +1422,47 @@ class MainWindow(QMainWindow):
         self._played = (playset.id, started)
         self.book.set_active(playset.id)
         self._fill_playsets(playset.id)
-        at = f", at {continue_from.empire} {continue_from.date}" if continue_from else ""
-        self.statusBar().showMessage(f"Stellaris is starting with {playset.name}{at}")
+        at = (
+            f", at {continue_from.empire} {continue_from.date}"
+            if skip_menu and continue_from
+            else ""
+        )
+        hidden = len(hidden_now(self._hidden_path)) if plan.hide else 0
+        hid = f". {hidden} save(s) of other playsets are hidden until it closes" if hidden else ""
+        self.statusBar().showMessage(f"Stellaris is starting with {playset.name}{at}{hid}")
         if hasattr(process, "poll"):
             self._game = process
             self._game_timer.start()
+
+    def _hide_plan(self, playset: Playset) -> HidePlan | None:
+        """The saves of other playsets to hide from the game, when its autosaves
+        stay local (decision 91). Read from settings.txt each time."""
+        if self.library is None or self.book is None or self.bindings is None:
+            return None
+        if autosaves_to_cloud(self.library.game.data_dir) is not False:
+            return None
+        others = self.bindings.bound_elsewhere(playset.id, {p.id for p in self.book.playsets})
+        return HidePlan(tuple(sorted(others)), self._hidden_path) if others else None
+
+    def _put_back_saves(self) -> None:
+        """Move back the saves Play hid, once the game isn't running."""
+        if not hidden_now(self._hidden_path):
+            return
+        if processes.running(processes.GAME):
+            # Started before Cold Steel was, or by an earlier run of it: wait for it to close.
+            self._restore_waiting = True
+            self._game_timer.start()
+            return
+        self._restore_waiting = False
+        result = restore(self._hidden_path)
+        if result.stuck:
+            listed = "\n".join(f"  {f}" for f in result.stuck)
+            self.tell(
+                "Hidden saves",
+                "These saves are still hidden, because a save folder of the same name "
+                f"is back in save games:\n{listed}\n\nThey're in {result.hidden_dir}. "
+                "Move them back by hand once you've checked which copy to keep.",
+            )
 
     # Errors from the game
 
@@ -1455,11 +1503,19 @@ class MainWindow(QMainWindow):
         self.errors_read.emit(report)
 
     def _check_game(self) -> None:
-        """Runs every few seconds while the game we started is open."""
-        if self._game is None or self._game.poll() is None:
+        """Runs every few seconds while the game is open: the one we started,
+        or one that was running when Cold Steel started with saves hidden."""
+        if self._game is None:
+            if self._restore_waiting and not processes.running(processes.GAME):
+                self._game_timer.stop()
+                self._put_back_saves()
+                self._scan_saves()
+            return
+        if self._game.poll() is None:
             return
         self._game_timer.stop()
         self._game = None
+        self._put_back_saves()
         self.statusBar().showMessage("Stellaris closed. Reading its error log…")
         self._read_errors(show=False)
         self._bind_played = True
@@ -2207,7 +2263,10 @@ class MainWindow(QMainWindow):
         found = None
         if self.library is not None and not self.settings.game_data_dir:
             found = self.library.game.data_dir
-        dialog = SettingsDialog(self.settings, found, self)
+        cloud = autosaves_to_cloud(self.library.game.data_dir) if self.library else None
+        dialog = SettingsDialog(
+            self.settings, found, self, game_found=self.library is not None, cloud_autosaves=cloud
+        )
         return dialog.settings() if dialog.exec() else None
 
     def show_health(self, mod: Mod, issues: Health) -> None:
@@ -2260,6 +2319,12 @@ class MainWindow(QMainWindow):
         self.tasks.cancel_all()
         self.tasks.wait(5000)
         super().closeEvent(event)
+
+
+def _continue_game(save: Save) -> ContinueGame:
+    """What continue_game.json says to open a save at its newest readable file."""
+    file = next((f for f in save.files if f.info), save.newest)
+    return ContinueGame(save.folder, file.name, save.empire, file.info.date if file.info else "")
 
 
 def _wrap_width(font: QFont, text: str, lines: int) -> int:
