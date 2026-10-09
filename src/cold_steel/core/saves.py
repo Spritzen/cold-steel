@@ -1,6 +1,8 @@
-"""Saves: the scan job that finds every save, and what each save file says.
+"""Saves: the scan job that finds them, and which playset each belongs to.
 
     saves = SaveScanner.for_game(game)(ctx)
+    book = BindingBook.open(path)
+    book.bind(["commonwealthofman_1251622081"], playset.id)
 
 A save is one folder, `<empire>_<number>`, in the local `save games/` folder,
 in Steam Cloud's, or in both (decision 80). Each `.sav` file in it is one save
@@ -9,7 +11,9 @@ timestamp (decision 9). Nothing outside our cache file is written.
 """
 
 import os
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import msgspec
@@ -26,6 +30,7 @@ from cold_steel.paradox.save import (
 )
 from cold_steel.store import paths
 from cold_steel.store.files import load_msgpack, save_msgpack
+from cold_steel.store.saves import Binding, BindingsFile, load_bindings, save_bindings
 
 # Bump when SaveInfo or CachedFile change shape, so old caches are thrown away.
 CACHE_VERSION = 1
@@ -152,3 +157,75 @@ def _read(path: Path, stamp: Stamp) -> CachedFile:
         return CachedFile(stamp, read_save_info(path))
     except SaveError as error:
         return CachedFile(stamp, None, str(error))
+
+
+class BindingBook:
+    """Which playset each save belongs to, by save folder. Every change is saved at once."""
+
+    def __init__(self, data: BindingsFile, path: Path) -> None:
+        self._data = data
+        self._path = path
+        self.problems: list[str] = []
+
+    @classmethod
+    def open(cls, path: Path) -> BindingBook:
+        """A file that exists but can't be read is renamed, not overwritten."""
+        data = load_bindings(path)
+        problems: list[str] = []
+        if data is None and path.exists():
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            kept = path.with_name(f"{path.stem}.unreadable-{stamp}{path.suffix}")
+            path.replace(kept)
+            problems.append(f"Your saves file couldn't be read. It was kept as {kept.name}.")
+        book = cls(data or BindingsFile(), path)
+        book.problems = problems
+        return book
+
+    def get(self, folder: str) -> Binding | None:
+        return self._data.saves.get(folder)
+
+    def playset_of(self, folder: str) -> str:
+        """The id of the playset the save belongs to, or "" if none."""
+        binding = self._data.saves.get(folder)
+        return binding.playset if binding else ""
+
+    def saves_of(self, playset_id: str) -> set[str]:
+        return {f for f, b in self._data.saves.items() if playset_id and b.playset == playset_id}
+
+    def bind(self, folders: Iterable[str], playset_id: str) -> None:
+        """Bind saves to a playset, or move them to it from another."""
+        bound = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for folder in folders:
+            self._data.saves[folder] = Binding(playset=playset_id, bound=bound)
+        self._save()
+
+    def unbind(self, folders: Iterable[str]) -> None:
+        """Unbind saves by choice. They're never suggested for a playset again."""
+        for folder in folders:
+            self._data.saves[folder] = Binding()
+        self._save()
+
+    def forget_playset(self, playset_id: str) -> int:
+        """The playset is gone: its saves belong to none, and may be suggested
+        for another. How many saves it had."""
+        gone = self.saves_of(playset_id)
+        for folder in gone:
+            del self._data.saves[folder]
+        if gone:
+            self._save()
+        return len(gone)
+
+    def _save(self) -> None:
+        save_bindings(self._data, self._path)
+
+
+def bound_saves(saves: Iterable[Save], book: BindingBook, playset_id: str) -> list[Save]:
+    """The saves bound to a playset, newest first."""
+    return [s for s in saves if book.playset_of(s.folder) == playset_id]
+
+
+def unbound_saves(
+    saves: Iterable[Save], book: BindingBook, playset_ids: Collection[str]
+) -> list[Save]:
+    """The saves bound to no playset that exists, newest first."""
+    return [s for s in saves if book.playset_of(s.folder) not in playset_ids]

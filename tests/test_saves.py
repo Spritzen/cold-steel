@@ -1,4 +1,4 @@
-"""Saves: reading one save file's meta, and the scan of both save folders."""
+"""Saves: reading one save file's meta, the scan of both save folders, and binding."""
 
 import os
 import zipfile
@@ -8,9 +8,16 @@ import pytest
 
 from cold_steel.core import saves as saves_module
 from cold_steel.core.jobs import Cancelled, JobContext
-from cold_steel.core.saves import Save, SaveScanner
+from cold_steel.core.saves import (
+    BindingBook,
+    Save,
+    SaveScanner,
+    bound_saves,
+    unbound_saves,
+)
 from cold_steel.paradox.game import find_game
 from cold_steel.paradox.save import SaveError, SaveInfo, cloud_save_dirs, read_save_info
+from cold_steel.store.saves import Binding, load_bindings
 from conftest import CLOUD_SAVES, OTHER_USER_SAVES, SampleInstall, make_save, snapshot
 
 UNE = "unitednationsofearth_-15512622"
@@ -154,3 +161,55 @@ def test_cancelling_stops_the_scan(sample_install: SampleInstall) -> None:
     ctx.cancel()
     with pytest.raises(Cancelled):
         scanner(sample_install)(ctx)
+
+
+def test_bind_move_and_unbind_saves(tmp_path: Path) -> None:
+    path = tmp_path / "saves.json"
+    book = BindingBook.open(path)
+    assert book.playset_of(UNE) == ""
+
+    book.bind([UNE, ELVES], "main")
+    assert book.saves_of("main") == {UNE, ELVES}
+    binding = book.get(UNE)
+    assert binding is not None and binding.playset == "main" and binding.bound
+
+    book.bind([ELVES], "second")  # a move
+    assert book.saves_of("main") == {UNE}
+    assert book.playset_of(ELVES) == "second"
+
+    book.unbind([UNE])
+    assert book.get(UNE) == Binding()  # kept, so it's never suggested again
+    assert book.saves_of("main") == set()
+
+    # Every change is saved at once.
+    saved = load_bindings(path)
+    assert saved is not None and saved.saves[ELVES].playset == "second"
+    assert BindingBook.open(path).playset_of(ELVES) == "second"
+
+
+def test_a_deleted_playsets_saves_are_forgotten(tmp_path: Path) -> None:
+    book = BindingBook.open(tmp_path / "saves.json")
+    book.bind([UNE, ELVES], "gone")
+    assert book.forget_playset("gone") == 2
+    assert book.get(UNE) is None and book.get(ELVES) is None
+    assert book.forget_playset("gone") == 0
+
+
+def test_an_unreadable_saves_file_is_kept(tmp_path: Path) -> None:
+    path = tmp_path / "saves.json"
+    path.write_text("{ not json")
+    book = BindingBook.open(path)
+    assert "couldn't be read" in book.problems[0]
+    assert not path.exists()
+    assert len(list(tmp_path.glob("saves.unreadable-*.json"))) == 1
+
+
+def test_saves_split_into_bound_and_unbound(sample_install: SampleInstall, tmp_path: Path) -> None:
+    saves = scan(sample_install)
+    book = BindingBook.open(tmp_path / "saves.json")
+    book.bind([ELVES], "main")
+    book.bind([UNE], "deleted elsewhere")
+
+    assert [s.folder for s in bound_saves(saves, book, "main")] == [ELVES]
+    # A save bound to a playset that no longer exists counts as unbound.
+    assert [s.folder for s in unbound_saves(saves, book, {"main"})] == [UNE]
