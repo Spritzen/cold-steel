@@ -5,7 +5,8 @@
     book.bind(["commonwealthofman_1251622081"], playset.id)
 
 A save is one folder, `<empire>_<number>`, in the local `save games/` folder,
-in Steam Cloud's, or in both (decision 80). Each `.sav` file in it is one save
+in Steam Cloud's, or in both (decision 80). Saves hidden while the game runs
+(core/hide.py) are read too, as local ones. Each `.sav` file in it is one save
 file of that save. A save file's `meta` is read once, then cached by size and
 timestamp (decision 9). Nothing outside our cache file is written.
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 
 import msgspec
 
+from cold_steel.core.hide import hidden_dir
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Stamp
@@ -97,6 +99,7 @@ class SaveScanner:
     local_dir: Path
     cloud_dirs: tuple[Path, ...]
     cache_file: Path
+    hidden_dir: Path | None = None  # saves of other playsets, hidden while the game runs
 
     @classmethod
     def for_game(cls, game: Game, cache_file: Path | None = None) -> SaveScanner:
@@ -104,12 +107,15 @@ class SaveScanner:
             local_save_dir(game.data_dir),
             cloud_save_dirs(game.steam_dir),
             cache_file or paths.cache_dir() / "saves.msgpack",
+            hidden_dir(game.data_dir),
         )
 
     def __call__(self, ctx: JobContext) -> tuple[Save, ...]:
         """Every save, the most recently written first."""
         ctx.progress(0, 0, "Finding saves")
         found = [(path, stamp, False) for path, stamp in _list_files(self.local_dir)]
+        if self.hidden_dir is not None:
+            found += [(path, stamp, False) for path, stamp in _list_files(self.hidden_dir)]
         for folder in self.cloud_dirs:
             found += [(path, stamp, True) for path, stamp in _list_files(folder)]
 
@@ -195,6 +201,15 @@ class BindingBook:
 
     def saves_of(self, playset_id: str) -> set[str]:
         return {f for f, b in self._data.saves.items() if playset_id and b.playset == playset_id}
+
+    def bound_elsewhere(self, playset_id: str, playset_ids: Collection[str]) -> set[str]:
+        """Saves bound to a playset other than this one, among `playset_ids`,
+        the playsets that exist. Play hides these from the game."""
+        return {
+            f
+            for f, b in self._data.saves.items()
+            if b.playset in playset_ids and b.playset != playset_id
+        }
 
     def bind(self, folders: Iterable[str], playset_id: str) -> None:
         """Bind saves to a playset, or move them to it from another."""

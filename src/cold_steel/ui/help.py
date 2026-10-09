@@ -39,7 +39,12 @@ playset each one belongs to.</li>
 <ul>
 <li><b>Play</b> writes <code>dlc_load.json</code>, which tells the game what to load. For a
 mod the launcher hasn't seen yet, it also adds the <code>.mod</code> file the game needs.
-<b>Continue</b> also writes <code>continue_game.json</code>, so the game opens that save.</li>
+It also writes <code>continue_game.json</code>, which names the save the game's
+<i>Continue</i> opens.</li>
+<li><b>Play</b> and <b>Continue</b>, with cloud autosaves off, move other playsets' saves to
+<code>cold_steel_hidden_saves</code>, beside <code>save games</code>, while the game runs, so
+its Load menu shows only this playset's. They're moved back when it closes. No file in
+them changes.</li>
 <li><b>Export to launcher</b> and <b>Open in launcher</b> write the playset into the
 launcher's database. <b>File &rsaquo; Sync launcher</b> replaces all its playsets with
 Cold Steel's.</li>

@@ -11,6 +11,7 @@ Only `meta` is read:
     mods={ "Cold Steel build: Cold Steel Mix" }
 """
 
+import re
 import zipfile
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from cold_steel.paradox.script import Node, ParseError, parse
 from cold_steel.paradox.vdf import VdfError, parse_vdf
 
 SAVE_FOLDER = "save games"
+_CLOUD_SETTING = re.compile(rb'^[ \t]*autosave_tocloud[ \t]*=[ \t]*"?(\w+)"?', re.MULTILINE)
 # A SteamID64 is this plus the account id, which names the user's userdata/ folder.
 _STEAM_ID_BASE = 76561197960265728
 
@@ -74,6 +76,17 @@ def _strings(nodes: tuple[Node, ...]) -> tuple[str, ...]:
 def local_save_dir(data_dir: Path) -> Path:
     """Where the game writes saves: `<Paradox data>/save games/`."""
     return data_dir / SAVE_FOLDER
+
+
+def autosaves_to_cloud(data_dir: Path) -> bool | None:
+    """Whether the game sends autosaves to Steam Cloud: `autosave_tocloud` in
+    its `settings.txt`. A missing line means yes, the game's default. None when
+    `settings.txt` is missing or can't be read."""
+    try:
+        found = _CLOUD_SETTING.search((data_dir / "settings.txt").read_bytes())
+    except OSError:
+        return None
+    return found is None or found.group(1) != b"no"
 
 
 def cloud_save_dirs(steam_dir: Path) -> tuple[Path, ...]:

@@ -14,9 +14,10 @@ from typing import Any, ClassVar
 
 import pytest
 
+from cold_steel.core.hide import hidden_now, restore
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library, Scanner
-from cold_steel.core.play import PlayError, plan_play, play
+from cold_steel.core.play import HidePlan, PlayError, plan_play, play
 from cold_steel.core.playsets import PlaysetBook
 from cold_steel.core.sync import (
     LauncherDifference,
@@ -34,7 +35,10 @@ from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.paradox.descriptor import parse_descriptor
 from cold_steel.paradox.dlc_load import DlcLoad, read_dlc_load, write_dlc_load
 from cold_steel.paradox.launcher_db import ExportMod, read_launcher, write_playset
+from cold_steel.paradox.save import local_save_dir
 from conftest import SampleInstall, snapshot
+
+UNE = "unitednationsofearth_-15512622"
 
 
 @pytest.fixture
@@ -352,7 +356,7 @@ def test_continue_backs_up_continue_game_then_skips_the_menu(
     path = library.game.data_dir / "continue_game.json"
     path.write_text('{\n\t"title":\t"save games/old_1/2200.01.01"\n}\n')
     target = ContinueGame("une_1", "autosave_2201.01.01", "United Nations of Earth", "2201.01.01")
-    plan = replace(plan_play(book.playsets[0], library), continue_from=target)
+    plan = replace(plan_play(book.playsets[0], library), continue_from=target, skip_menu=True)
     play(plan, library.game, backups)
 
     assert path.read_text() == (
@@ -366,6 +370,63 @@ def test_continue_backs_up_continue_game_then_skips_the_menu(
     assert "old_1" in backup.read_text()
     (call,) = FakePopen.calls
     assert call["args"] == [str(game_exe), "-gdpr-compliant", "--continuelastsave"]
+
+
+def test_play_points_continue_game_at_a_save_but_shows_the_menu(
+    library: Library,
+    book: PlaysetBook,
+    backups: Path,
+    game_exe: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    FakePopen.calls = []
+    target = ContinueGame("une_1", "2201.01.26", "United Nations of Earth", "2201.01.26")
+    play(replace(plan_play(book.playsets[0], library), continue_from=target), library.game, backups)
+    assert (
+        "save games/une_1/2201.01.26" in (library.game.data_dir / "continue_game.json").read_text()
+    )
+    (call,) = FakePopen.calls
+    assert call["args"] == [str(game_exe), "-gdpr-compliant"]
+
+
+def test_play_hides_other_playsets_saves_before_starting_the_game(
+    library: Library,
+    book: PlaysetBook,
+    backups: Path,
+    game_exe: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    saves = local_save_dir(library.game.data_dir)
+    record = tmp_path / "hidden.json"
+    hidden_at_start: list[bool] = []
+
+    class Starting(FakePopen):
+        def __init__(self, args: list[str], **kwargs: Any) -> None:
+            hidden_at_start.append(not (saves / UNE).exists())
+            super().__init__(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Starting)
+    plan = replace(plan_play(book.playsets[0], library), hide=HidePlan((UNE,), record))
+    play(plan, library.game, backups)
+    assert hidden_at_start == [True]
+    assert hidden_now(record) == (UNE,)
+
+    # The game couldn't start: they're put back.
+    restore(record)
+    before = snapshot(saves)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise OSError("not a program")
+
+    monkeypatch.setattr(subprocess, "Popen", broken)
+    with pytest.raises(PlayError, match="Couldn't start"):
+        play(plan, library.game, backups)
+    assert snapshot(saves) == before
+    assert hidden_now(record) == ()
 
 
 @pytest.mark.parametrize(
