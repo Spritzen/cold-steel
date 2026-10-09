@@ -1,0 +1,13 @@
+version="Cygnus v4.5.2"
+name="United Nations of Earth"
+date="2201.01.01"
+required_dlcs=
+{
+	"Apocalypse"
+	"Federations"
+}
+mods=
+{
+	"Alpha Interface"
+	"Beta Ships"
+}

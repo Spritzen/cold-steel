@@ -6,7 +6,7 @@ See docs/reference/stellaris-files.md.
 import json
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cold_steel.paradox.vdf import VdfError, VdfValue, parse_vdf
@@ -30,6 +30,7 @@ class Game:
     data_dir: Path  # Paradox user data: .../Paradox Interactive/Stellaris
     exe: Path = Path()  # the game program, from launcher-settings.json
     exe_args: tuple[str, ...] = ()  # what the launcher passes it: ("-gdpr-compliant",)
+    steam_dir: Path = Path()  # the Steam folder it was found through; holds userdata/
 
     @property
     def workshop_dir(self) -> Path:
@@ -55,7 +56,7 @@ def find_game(steam_dirs: Iterable[Path]) -> Game:
         for library in steam_libraries(steam_dir):
             install = library / "steamapps/common" / _install_folder(library)
             if (install / "launcher-settings.json").is_file():
-                return _read_game(install, library)
+                return replace(_read_game(install, library), steam_dir=steam_dir)
         tried.append(f"{steam_dir} (Stellaris isn't installed in its libraries)")
     raise GameNotFound("Stellaris wasn't found. Looked in: " + "; ".join(tried or ["nowhere"]))
 

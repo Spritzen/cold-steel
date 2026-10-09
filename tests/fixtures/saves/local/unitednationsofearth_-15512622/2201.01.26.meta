@@ -1,0 +1,25 @@
+version="Cygnus v4.5.2"
+version_control_revision=101
+name="United Nations of Earth"
+date="2201.01.26"
+required_dlcs=
+{
+	"Apocalypse"
+	"Federations"
+}
+mods=
+{
+	"Alpha Interface"
+	"Beta Ships"
+}
+player_portrait="human"
+flag=
+{
+	colors=
+	{
+		"blue"
+		"white"
+	}
+}
+meta_fleets=12
+meta_planets=1

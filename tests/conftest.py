@@ -16,6 +16,11 @@ os.environ["QT_QPA_PLATFORM"] = os.environ.get("COLD_STEEL_TEST_QPA", "offscreen
 FIXTURES = Path(__file__).parent / "fixtures"
 WORKSHOP = "games/steamapps/workshop/content/281990"
 PARADOX = "home/.local/share/Paradox Interactive/Stellaris"
+# Steam Cloud's save folders: the last Steam user's (account 1000), and another's.
+CLOUD_SAVES = "home/.local/share/Steam/userdata/1000/281990/remote/save games"
+OTHER_USER_SAVES = "home/.local/share/Steam/userdata/2000/281990/remote/save games"
+# When the oldest fixture save was written; each later one is an hour after.
+SAVED_FROM = 1_791_000_000
 
 
 @dataclass(frozen=True)
@@ -72,10 +77,36 @@ def build_sample_install(root: Path) -> None:
                 zf.write(file, file.relative_to(FIXTURES / "zipped/2000000003").as_posix())
         zf.writestr("cover.png", make_png(3, 3, (40, 40, 200)))
 
+    build_saves(root)
+
     sql = (FIXTURES / "launcher-v2.sql").read_text("utf-8").replace("@ROOT@", str(root))
     with sqlite3.connect(root / PARADOX / "launcher-v2.sqlite") as conn:
         conn.executescript(sql)
     conn.close()
+
+
+def build_saves(root: Path) -> None:
+    """Zip each tests/fixtures/saves/**/*.meta into a .sav in its save folder.
+    They're dated by name, an hour apart, so a later in-game date is a later save."""
+    places = {
+        "local": root / PARADOX / "save games",
+        "cloud": root / CLOUD_SAVES,
+        "other-user": root / OTHER_USER_SAVES,
+    }
+    metas = sorted((FIXTURES / "saves").rglob("*.meta"), key=lambda p: p.stem.split("_")[-1])
+    for hour, meta in enumerate(metas):
+        place = meta.relative_to(FIXTURES / "saves").parts[0]
+        target = places[place] / meta.parent.name / f"{meta.stem}.sav"
+        make_save(target, meta.read_text("utf-8"))
+        os.utime(target, ns=((SAVED_FROM + hour * 3600) * 10**9,) * 2)
+
+
+def make_save(path: Path, meta: str) -> None:
+    """A .sav as the game writes it: a zip of `gamestate`, then `meta`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("gamestate", 'date="2200.01.01"\n')
+        zf.writestr("meta", meta)
 
 
 def make_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
