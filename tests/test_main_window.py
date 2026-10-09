@@ -12,7 +12,9 @@ from cold_steel.core import playsets as ops
 from cold_steel.core.build import BuildError, BuildRecord
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Scanner
+from cold_steel.core.play import PlayPlan
 from cold_steel.core.saves import Save
+from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.store.playsets import Playset
 from cold_steel.store.settings import Settings
 from cold_steel.ui import main_window as main_window_module
@@ -1496,3 +1498,67 @@ def test_a_failed_rebuild_changes_no_binding(
     qtbot.waitUntil(lambda: clashing._build_task is None, timeout=5_000)
     assert "something is in the way" in told[0]
     assert clashing.bindings.get(UNE) == before
+
+
+def played_with(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> list[PlayPlan]:
+    """Record each plan Play or Continue hands to the game, instead of starting it."""
+    plans: list[PlayPlan] = []
+
+    def launch(plan: PlayPlan, *args: object) -> None:
+        plans.append(plan)
+
+    monkeypatch.setattr(window, "launch", launch)
+    return plans
+
+
+def test_continue_opens_the_newest_save(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert window.book is not None
+    second = window.book.playsets[1]
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._scan_saves()
+    window.playset_list.setCurrentRow(2)
+    assert not window.continue_action.isEnabled()  # no saves yet
+
+    window.bind_saves([ELVES], second.id)
+    assert window.continue_action.isEnabled()
+    plans = played_with(window, monkeypatch)
+    window.continue_action.trigger()
+    (plan,) = plans
+    assert plan.continue_from == ContinueGame(
+        ELVES, "2200.01.01", "Divine Elven Order", "2200.01.01"
+    )
+    assert "at Divine Elven Order 2200.01.01" in window.statusBar().currentMessage()
+
+
+def test_continuing_a_save_whose_mods_differ_asks_first(
+    qtbot: QtBot, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert window.book is not None
+    second = window.book.playsets[1]
+    window.playset_list.setCurrentRow(2)
+    dialog = open_saves(qtbot, window)
+    window.bind_saves([UNE], second.id)  # made with Alpha and Beta; Second plays Gamma
+    plans = played_with(window, monkeypatch)
+    asked: list[str] = []
+    answer = False
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return answer
+
+    monkeypatch.setattr(window, "confirm", confirm)
+    window.continue_action.trigger()
+    assert "is marked: Mods differ" in asked[0] and "Removed since: Alpha Interface" in asked[0]
+    assert plans == []
+
+    # Continue from one file: its autosave in Steam Cloud.
+    answer = True
+    autosave = window.saves[0].files[1] if window.saves else None
+    assert autosave is not None and autosave.cloud
+    menu = dialog.file_menu(UNE, str(autosave.path))
+    menu.actions()[0].trigger()
+    (plan,) = plans
+    assert plan.continue_from is not None
+    assert plan.continue_from.title == f"save games/{UNE}/autosave_2201.01.01"

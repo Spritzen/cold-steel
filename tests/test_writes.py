@@ -7,6 +7,7 @@ Each write must make a dated backup first, and write nothing if it can't
 import sqlite3
 import subprocess
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -28,6 +29,7 @@ from cold_steel.core.sync import (
 )
 from cold_steel.paradox import processes
 from cold_steel.paradox.backup import backup_file, backups_of
+from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.paradox.descriptor import parse_descriptor
 from cold_steel.paradox.dlc_load import DlcLoad, read_dlc_load, write_dlc_load
 from cold_steel.paradox.launcher_db import ExportMod, read_launcher, write_playset
@@ -334,6 +336,35 @@ def test_play_writes_dlc_load_then_starts_the_game(
     assert call["args"] == [str(game_exe), "-gdpr-compliant"]
     assert call["cwd"] == library.game.install_dir
     assert call["start_new_session"] is True
+
+
+def test_continue_backs_up_continue_game_then_skips_the_menu(
+    library: Library,
+    book: PlaysetBook,
+    backups: Path,
+    game_exe: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    FakePopen.calls = []
+    path = library.game.data_dir / "continue_game.json"
+    path.write_text('{\n\t"title":\t"save games/old_1/2200.01.01"\n}\n')
+    target = ContinueGame("une_1", "autosave_2201.01.01", "United Nations of Earth", "2201.01.01")
+    plan = replace(plan_play(book.playsets[0], library), continue_from=target)
+    play(plan, library.game, backups)
+
+    assert path.read_text() == (
+        "{\n"
+        '\t"title":\t"save games/une_1/autosave_2201.01.01",\n'
+        '\t"desc":\t"United Nations of Earth",\n'
+        '\t"date":\t"2201.01.01"\n'
+        "}\n"
+    )
+    (backup,) = backups_of(path, backups)
+    assert "old_1" in backup.read_text()
+    (call,) = FakePopen.calls
+    assert call["args"] == [str(game_exe), "-gdpr-compliant", "-continuelastsave"]
 
 
 @pytest.mark.parametrize(

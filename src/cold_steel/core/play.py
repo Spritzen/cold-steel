@@ -3,6 +3,9 @@
 The game reads `dlc_load.json` as it starts, so writing that file is what
 makes a playset take effect. The game is started directly, not through Steam,
 so the Paradox launcher doesn't open. Steam must be running.
+
+Continue does the same, then has the game open one save file instead of its
+main menu: `continue_game.json` names it, and `-continuelastsave` opens it.
 """
 
 import subprocess
@@ -12,6 +15,7 @@ from pathlib import Path
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
 from cold_steel.paradox import processes
+from cold_steel.paradox.continue_game import CONTINUE_ARG, ContinueGame, write_continue_game
 from cold_steel.paradox.descriptor import Descriptor, format_descriptor
 from cold_steel.paradox.dlc_load import DlcLoad, write_dlc_load
 from cold_steel.paradox.game import Game
@@ -28,6 +32,7 @@ class PlayPlan:
     # mod/*.mod files the game needs but that don't exist yet: path -> text
     new_descriptors: dict[Path, str] = field(default_factory=dict)
     skipped: tuple[str, ...] = ()  # names of turned-on mods that aren't installed
+    continue_from: ContinueGame | None = None  # the save file to open, for Continue
 
 
 def plan_play(playset: Playset, library: Library) -> PlayPlan:
@@ -68,10 +73,11 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
     if not game.exe.is_file():
         raise PlayError(f"The game program isn't there: {game.exe}")
     write_plan(plan, game, backup_dir)
+    extra = (CONTINUE_ARG,) if plan.continue_from else ()
     try:
         # Its own session, so closing Cold Steel doesn't close the game.
         return subprocess.Popen(
-            [str(game.exe), *game.exe_args],
+            [str(game.exe), *game.exe_args, *extra],
             cwd=game.install_dir,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -83,7 +89,8 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
 
 
 def write_plan(plan: PlayPlan, game: Game, backup_dir: Path) -> None:
-    """Add any missing mod/*.mod files, then write dlc_load.json after a backup."""
+    """Add any missing mod/*.mod files, then write dlc_load.json after a backup,
+    and continue_game.json too for Continue."""
     for path, text in plan.new_descriptors.items():
         if not path.exists():  # only ever add a missing one, never overwrite
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +99,11 @@ def write_plan(plan: PlayPlan, game: Game, backup_dir: Path) -> None:
         write_dlc_load(game.data_dir, plan.load, backup_dir)
     except OSError as error:
         raise PlayError(f"Couldn't write dlc_load.json: {error}") from error
+    if plan.continue_from is not None:
+        try:
+            write_continue_game(game.data_dir, plan.continue_from, backup_dir)
+        except OSError as error:
+            raise PlayError(f"Couldn't write continue_game.json: {error}") from error
 
 
 def _descriptor(mod: Mod) -> Descriptor:

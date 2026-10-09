@@ -24,6 +24,7 @@ from cold_steel.store.playsets import Playset
 from cold_steel.ui.full_text import show_full_text
 
 FOLDER_ROLE = Qt.ItemDataRole.UserRole
+FILE_ROLE = Qt.ItemDataRole.UserRole + 1  # on a save file's row: its path
 COLUMNS = ["Save", "In game", "Saved", "Version", "Where"]
 # The last column: how a bound save compares with its playset, or which
 # playset an unbound one is suggested for.
@@ -66,6 +67,9 @@ class SavesDialog(QDialog):
     bind_requested = Signal(tuple, str)
     # Unbind these saves (folders). They're not suggested for a playset again.
     unbind_requested = Signal(tuple)
+    # Play the playset and open a save (folder), at one of its files (path), or
+    # at its newest when the path is "".
+    continue_requested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -214,6 +218,8 @@ class SavesDialog(QDialog):
                     ],
                 )
                 child.setToolTip(0, f"{file.path}\n{file.problem}".strip())
+                child.setData(0, FOLDER_ROLE, save.folder)
+                child.setData(0, FILE_ROLE, str(file.path))
                 child.setFlags(child.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             item.setSelected(save.folder in selected)
             item.setExpanded(save.folder in expanded)
@@ -238,7 +244,12 @@ class SavesDialog(QDialog):
 
     def _menu(self, tree: QTreeWidget, pos: QPoint) -> None:
         item = tree.itemAt(pos)
-        if item is not None and item.parent() is None and not item.isSelected():
+        if item is not None and item.parent() is not None:  # a save file
+            if tree is self.bound:
+                menu = self.file_menu(item.data(0, FOLDER_ROLE), item.data(0, FILE_ROLE))
+                menu.exec(tree.viewport().mapToGlobal(pos))
+            return
+        if item is not None and not item.isSelected():
             tree.clearSelection()
             item.setSelected(True)
         folders = self._folders(tree)
@@ -247,10 +258,22 @@ class SavesDialog(QDialog):
         menu = self.menu_for(tree, folders)
         menu.exec(tree.viewport().mapToGlobal(pos))
 
+    def file_menu(self, folder: str, path: str) -> QMenu:
+        """The right-click menu for one save file of a bound save."""
+        menu = QMenu(self)
+        act = menu.addAction("Continue from this file")
+        act.triggered.connect(lambda: self.continue_requested.emit(folder, path))
+        return menu
+
     def menu_for(self, tree: QTreeWidget, folders: tuple[str, ...]) -> QMenu:
         """The right-click menu for these saves. Kept apart so tests can use it."""
         menu = QMenu(self)
         bound = tree is self.bound
+        if bound and len(folders) == 1:
+            act = menu.addAction("Continue")
+            act.setToolTip("Play this playset and open this save at its newest file")
+            act.triggered.connect(lambda: self.continue_requested.emit(folders[0], ""))
+            menu.addSeparator()
         target = menu.addMenu("Move to playset" if bound else "Bind to playset")
         for playset in self.playsets:
             if bound and self.playset is not None and playset.id == self.playset.id:

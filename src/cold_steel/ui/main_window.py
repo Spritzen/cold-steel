@@ -4,6 +4,7 @@ import contextlib
 import math
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +134,7 @@ from cold_steel.core.sync import (
     sync_launcher,
 )
 from cold_steel.paradox import processes
+from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.paradox.save import local_save_dir
@@ -329,6 +331,8 @@ class MainWindow(QMainWindow):
         self.sort_action = action("&Sort load order", self.sort_mods, "Ctrl+L")
         self.dlc_action = action("&DLC…", self.choose_dlc)
         self.play_action = action("&Play", self.play, "Ctrl+Return")
+        self.continue_action = action("Con&tinue", self.continue_playset)
+        self.continue_action.setEnabled(False)
         self.saves_action = action("S&aves…", self.show_saves)
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
@@ -349,7 +353,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self.new_action, self.copy_action, self.rename_action])
         menu.addAction(self.delete_action)
         menu.addSeparator()
-        menu.addActions([self.play_action, self.saves_action])
+        menu.addActions([self.play_action, self.continue_action, self.saves_action])
         menu.addActions([self.errors_action, self.conflicts_action])
         menu.addAction(self.delete_patch_action)
         menu.addActions([self.sort_action, self.dlc_action])
@@ -430,6 +434,8 @@ class MainWindow(QMainWindow):
         playset_bar = QHBoxLayout(self.playset_bar)
         playset_bar.setContentsMargins(0, 0, 0, 0)
         playset_bar.addWidget(self.play_button)
+        self.continue_button = self._button("Continue", self.continue_action)
+        playset_bar.addWidget(self.continue_button)
         self.errors_button = self._button("Errors", self.errors_action)
         playset_bar.addWidget(self.errors_button)
         playset_bar.addWidget(self._button("Conflicts", self.conflicts_action))
@@ -1347,10 +1353,44 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Loaded {playset.name}")
 
     def play(self) -> None:
+        self._play(None)
+
+    def continue_playset(self, folder: str = "", path: str = "") -> None:
+        """Play the selected playset and open one of its saves, skipping the
+        game's main menu. By default its newest save, at its newest file."""
+        playset, bindings = self.selected_playset(), self.bindings
+        if playset is None or bindings is None:
+            return
+        bound = bound_saves(self.saves or (), bindings, playset.id)
+        save = next((s for s in bound if s.folder == folder), None) if folder else None
+        save = save or (bound[0] if bound else None)
+        if save is None:
+            return
+        readable = [f for f in save.files if f.info]
+        file = next((f for f in save.files if str(f.path) == path), None) if path else None
+        file = file or (readable[0] if readable else save.newest)
+        check = self._check_saves(playset, [save]).get(save.folder)
+        if (
+            check
+            and check.marks
+            and not self.confirm(
+                "Continue",
+                f"\u201c{save.empire}\u201d is marked: {', '.join(check.marks)}.\n\n"
+                + "\n".join(check.details())
+                + "\n\nContinue anyway?",
+            )
+        ):
+            return
+        date = file.info.date if file.info else ""
+        self._play(ContinueGame(save.folder, file.name, save.empire, date))
+
+    def _play(self, continue_from: ContinueGame | None) -> None:
         playset = self.selected_playset()
         if playset is None or self.book is None or self.library is None:
             return
         plan = plan_play(as_played(playset), self.library)
+        if continue_from is not None:
+            plan = dataclass_replace(plan, continue_from=continue_from)
         if plan.skipped and not self.confirm(
             "Some mods aren't installed",
             "These mods aren't installed, so the game won't load them:\n"
@@ -1367,7 +1407,8 @@ class MainWindow(QMainWindow):
         self._played = (playset.id, started)
         self.book.set_active(playset.id)
         self._fill_playsets(playset.id)
-        self.statusBar().showMessage(f"Stellaris is starting with {playset.name}")
+        at = f", at {continue_from.empire} {continue_from.date}" if continue_from else ""
+        self.statusBar().showMessage(f"Stellaris is starting with {playset.name}{at}")
         if hasattr(process, "poll"):
             self._game = process
             self._game_timer.start()
@@ -1826,6 +1867,7 @@ class MainWindow(QMainWindow):
             dialog = self._saves_dialog = SavesDialog(self)
             dialog.bind_requested.connect(self.bind_saves)
             dialog.unbind_requested.connect(self.unbind_saves)
+            dialog.continue_requested.connect(self.continue_playset)
         self._show_saves(playset, opening=True)
         self.show_dialog(dialog)
         self._scan_saves()  # finds files written since
@@ -1836,6 +1878,13 @@ class MainWindow(QMainWindow):
         saves, bindings, library = self.saves, self.bindings, self.library
         bound = bound_saves(saves or (), bindings, playset.id) if playset and bindings else []
         self.saves_button.setText(f"Saves ({len(bound)})" if bound else "Saves")
+        self.continue_action.setEnabled(bool(bound))
+        newest = bound[0] if bound else None
+        self.continue_button.setToolTip(
+            f"Play and open {newest.empire}, the newest save of this playset"
+            if newest
+            else "This playset has no saves yet"
+        )
         checks = self._check_saves(playset, bound) if playset and library else {}
         differ = [s.empire for s in bound if checks[s.folder].mods_differ]
         if differ:
