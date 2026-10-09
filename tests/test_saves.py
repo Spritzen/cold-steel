@@ -1,4 +1,4 @@
-"""Reading save games: one save's meta, and the scan of both save folders."""
+"""Saves: reading one save file's meta, and the scan of both save folders."""
 
 import os
 import zipfile
@@ -8,7 +8,7 @@ import pytest
 
 from cold_steel.core import saves as saves_module
 from cold_steel.core.jobs import Cancelled, JobContext
-from cold_steel.core.saves import SavedGame, SaveScanner
+from cold_steel.core.saves import Save, SaveScanner
 from cold_steel.paradox.game import find_game
 from cold_steel.paradox.save import SaveError, SaveInfo, cloud_save_dirs, read_save_info
 from conftest import CLOUD_SAVES, OTHER_USER_SAVES, SampleInstall, make_save, snapshot
@@ -22,7 +22,7 @@ def scanner(install: SampleInstall) -> SaveScanner:
     return SaveScanner.for_game(game, install.cache_file.with_name("saves.msgpack"))
 
 
-def scan(install: SampleInstall) -> tuple[SavedGame, ...]:
+def scan(install: SampleInstall) -> tuple[Save, ...]:
     return scanner(install)(JobContext())
 
 
@@ -67,19 +67,19 @@ def test_without_a_last_user_every_cloud_folder_is_read(sample_install: SampleIn
     )
 
 
-def test_games_are_found_in_both_folders(sample_install: SampleInstall) -> None:
-    games = scan(sample_install)
+def test_saves_are_found_in_both_folders(sample_install: SampleInstall) -> None:
+    saves = scan(sample_install)
 
-    # Newest first. Another Steam user's game isn't listed.
-    assert [g.folder for g in games] == [UNE, ELVES]
-    une = games[0]
+    # Newest first. Another Steam user's save isn't listed.
+    assert [s.folder for s in saves] == [UNE, ELVES]
+    une = saves[0]
     assert une.empire == "United Nations of Earth"
-    assert [(s.name, s.cloud) for s in une.saves] == [
+    assert [(s.name, s.cloud) for s in une.files] == [
         ("2201.01.26", False),
         ("autosave_2201.01.01", True),
     ]
     assert une.newest.info is not None and une.newest.info.date == "2201.01.26"
-    assert une.saved > games[1].saved
+    assert une.saved > saves[1].saved
 
 
 def test_an_unreadable_save_is_listed_with_its_problem(sample_install: SampleInstall) -> None:
@@ -91,9 +91,9 @@ def test_an_unreadable_save_is_listed_with_its_problem(sample_install: SampleIns
     newest = une.newest
     assert newest.name == "2201.02.01"
     assert newest.info is None and "Not a readable save" in newest.problem
-    # The game is still named by its newest save that can be read.
+    # The save is still named by its newest file that can be read.
     assert une.empire == "United Nations of Earth"
-    assert len(une.saves) == 3
+    assert len(une.files) == 3
 
 
 def test_find_game_remembers_the_steam_folder(sample_install: SampleInstall) -> None:
@@ -142,7 +142,7 @@ def test_a_new_or_changed_save_is_read_again(
     assert sorted(read) == ["2201.03.01.sav", "autosave_2201.01.01.sav"]
 
 
-def test_missing_save_folders_are_no_games(sample_install: SampleInstall) -> None:
+def test_missing_save_folders_are_no_saves(sample_install: SampleInstall) -> None:
     job = scanner(sample_install)
     job.local_dir = sample_install.root / "nowhere"
     job.cloud_dirs = ()
