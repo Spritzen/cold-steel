@@ -29,13 +29,16 @@ THEMES = (("Follow the system", "system"), ("Light", "light"), ("Dark", "dark"))
 
 # Whether the game sends autosaves to Steam Cloud, as its settings.txt says.
 CLOUD_STATE = {True: "On", False: "Off", None: "Unknown: the game's settings.txt couldn't be read"}
-TURN_OFF_CLOUD = "Turn them off in the game's settings to use Cold Steel's saves features."
+TURN_OFF_CLOUD = (
+    "Turn off Autosave to Cloud in the game's settings to use Cold Steel's saves features."
+)
 TURN_OFF_DETAIL = (
     "Saves, Continue, and keeping other playsets' saves out of the game's Load menu "
     "need autosaves kept locally, because Cold Steel can't move Steam Cloud's files.\n"
-    "In the game's settings, turn off cloud autosaves, or set autosave_tocloud=no in "
-    "its settings.txt while the game is closed. Autosaves already in Steam Cloud stay "
-    "there: delete them from the game's Load menu, or leave them."
+    "The game offers Autosave to Cloud only while Steam Cloud is on for Stellaris in "
+    "Steam. Turn it off and press Apply, or set autosave_tocloud=no in its settings.txt "
+    "while the game is closed. Autosaves already in Steam Cloud stay there: delete them "
+    "from the game's Load menu, or leave them."
 )
 
 
