@@ -27,12 +27,12 @@ def config_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """Playsets, conflict choices, patch mods, pinned copies, builds and backups.
-    `~/.local/share/cold-steel/`."""
+    """Playsets, save bindings, conflict choices, patch mods, pinned copies, builds
+    and backups. `~/.local/share/cold-steel/`."""
     return _xdg("XDG_DATA_HOME", ".local/share")
 
 
 def cache_dir() -> Path:
-    """Caches: mods, health results, the object index, thumbnails. Safe to delete.
+    """Caches: mods, saves, health results, the object index, thumbnails. Safe to delete.
     `~/.cache/cold-steel/`."""
     return _xdg("XDG_CACHE_HOME", ".cache")
