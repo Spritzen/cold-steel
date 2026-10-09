@@ -36,9 +36,9 @@ TURN_OFF_DETAIL = (
     "Saves, Continue, and keeping other playsets' saves out of the game's Load menu "
     "need autosaves kept locally, because Cold Steel can't move Steam Cloud's files.\n"
     "The game offers Autosave to Cloud only while Steam Cloud is on for Stellaris in "
-    "Steam. Turn it off and press Apply, or set autosave_tocloud=no in its settings.txt "
-    "while the game is closed. Autosaves already in Steam Cloud stay there: delete them "
-    "from the game's Load menu, or leave them."
+    "Steam. Turn it off and press Apply, or delete the autosave_tocloud=yes line from "
+    "its settings.txt while the game is closed. Autosaves already in Steam Cloud stay "
+    "there: delete them from the game's Load menu, or leave them."
 )
 
 

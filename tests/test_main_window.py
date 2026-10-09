@@ -1650,12 +1650,12 @@ def test_the_saves_features_are_off_while_autosaves_go_to_steam_cloud(
     window._scan_saves()
     assert window._saves_task is None  # not even read
 
-    settings.unlink()  # can't tell: treated as cloud
+    settings.unlink()  # can't tell: treated as cloud, so off
     window._read_saves_setting()
     assert not on()
 
     # Turned off in the game: back as soon as Cold Steel notices, and read again.
-    settings.write_text("autosave_tocloud=no\n")
+    settings.write_text("autosave=4\n")  # as the game writes it with the option off
     with qtbot.waitSignal(window.saves_found, timeout=10_000):
         monkeypatch.setattr(window, "ask_settings", lambda: None)
         window.edit_settings()
