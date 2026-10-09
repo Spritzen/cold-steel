@@ -80,8 +80,12 @@ def local_save_dir(data_dir: Path) -> Path:
 
 def autosaves_to_cloud(data_dir: Path) -> bool | None:
     """Whether the game sends autosaves to Steam Cloud: `autosave_tocloud` in
-    its `settings.txt`. A missing line means yes, the game's default. None when
-    `settings.txt` is missing or can't be read."""
+    its `settings.txt`, the game's "Autosave to Cloud". None when `settings.txt`
+    is missing or can't be read.
+
+    A missing line counts as yes. The game drops the line when Steam Cloud is
+    off for it in Steam, and where its autosaves go then isn't known.
+    """
     try:
         found = _CLOUD_SETTING.search((data_dir / "settings.txt").read_bytes())
     except OSError:
