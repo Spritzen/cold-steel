@@ -266,6 +266,8 @@ class MainWindow(QMainWindow):
         self._bind_played = False  # the next save scan does that binding
         # What to do with the built playset's saves once the running build succeeds.
         self._rebuild: RebuildChoice | None = None
+        # The playset whose Build waits for the saves to be read, to ask about them.
+        self._build_waiting = ""
         # The game we started, watched so its errors can be read when it closes.
         self._game: Any = None
         self._game_timer = QTimer(self, interval=3000)
@@ -1830,9 +1832,16 @@ class MainWindow(QMainWindow):
         task = self.tasks.start(SaveScanner.for_game(self.library.game))
         self._saves_task = task
         task.succeeded.connect(lambda saves: self._saves_read(saves, task))
-        task.failed.connect(
-            lambda error: self.statusBar().showMessage(f"Reading your saves failed: {error}")
-        )
+        task.failed.connect(lambda error: self._saves_failed(error, task))
+
+    def _saves_failed(self, error: Exception, task: Task) -> None:
+        if task is not self._saves_task:
+            return
+        self._saves_task = None
+        self.statusBar().showMessage(f"Reading your saves failed: {error}")
+        if self._build_waiting:
+            self._build_waiting = ""
+            self.tell("Build", f"The build didn't start: your saves couldn't be read. {error}")
 
     def _saves_read(self, saves: tuple[Save, ...], task: Task) -> None:
         if task is not self._saves_task:
@@ -1843,6 +1852,13 @@ class MainWindow(QMainWindow):
             self._bind_new_saves(saves)
         self._show_saves(self.selected_playset())
         self.saves_found.emit(saves)
+        if self._build_waiting:
+            waiting, self._build_waiting = self._build_waiting, ""
+            playset = self.selected_playset()
+            if playset is not None and playset.id == waiting:
+                self.build_mod()
+            else:
+                self.statusBar().showMessage("Build cancelled: another playset was chosen")
 
     def _bind_new_saves(self, saves: tuple[Save, ...]) -> None:
         """Bind the saves written since Play to the playset it played (decision 82)."""
@@ -1984,6 +2000,13 @@ class MainWindow(QMainWindow):
             )
         ):
             return
+        if self._saves_needed(playset):
+            # Asking about the built playset's saves needs them read, off the main thread.
+            self._build_waiting = playset.id
+            self.statusBar().showMessage("Reading your saves before the build…")
+            if self._saves_task is None:
+                self._scan_saves()
+            return
         go, rebuild = self._ask_about_saves(playset)
         if not go:
             return
@@ -2028,17 +2051,29 @@ class MainWindow(QMainWindow):
         self._rebuild = None  # a failed or cancelled build changes no binding
         self.progress.hide()
 
+    def _built_playset(self, playset: Playset) -> Playset | None:
+        """The playset that plays this playset's build, if it was built."""
+        stamp = load_stamp(self._build_dir, playset.id)
+        book = self.book
+        return book.get(stamp.built_playset) if book and stamp and stamp.built_playset else None
+
+    def _saves_needed(self, playset: Playset) -> bool:
+        """The built playset has saves, and they haven't been read yet."""
+        built, bindings = self._built_playset(playset), self.bindings
+        return (
+            self.saves is None
+            and built is not None
+            and bool(bindings and bindings.saves_of(built.id))
+        )
+
     def _ask_about_saves(self, playset: Playset) -> tuple[bool, RebuildChoice | None]:
         """Before a rebuild, ask what to do with the saves bound to the built
         playset (decision 85). Whether to build, and the answer if one was asked."""
-        library, book, bindings = self.library, self.book, self.bindings
-        stamp = load_stamp(self._build_dir, playset.id)
-        built = book.get(stamp.built_playset) if book and stamp and stamp.built_playset else None
+        library, bindings = self.library, self.bindings
+        built = self._built_playset(playset)
         if library is None or bindings is None or built is None:
             return True, None
         folders = bindings.saves_of(built.id)
-        if folders and self.saves is None:  # not read yet: from the cache, it takes a moment
-            self.saves = SaveScanner.for_game(library.game)(JobContext())
         saves = [s for s in self.saves or () if s.folder in folders]
         if not saves:
             return True, None

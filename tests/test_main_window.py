@@ -1562,3 +1562,51 @@ def test_continuing_a_save_whose_mods_differ_asks_first(
     (plan,) = plans
     assert plan.continue_from is not None
     assert plan.continue_from.title == f"save games/{UNE}/autosave_2201.01.01"
+
+
+def saves_not_read_yet(qtbot: QtBot, window: MainWindow) -> None:
+    """As if Build were pressed before the first save scan finished."""
+    qtbot.waitUntil(lambda: window._saves_task is None, timeout=10_000)
+    window.saves = None
+
+
+def test_a_rebuild_waits_for_the_saves_instead_of_blocking(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build(qtbot, clashing)
+    clashing.bind_saves([UNE], built_playset(clashing).id)
+    clashing.playset_list.setCurrentRow(1)
+    saves_not_read_yet(qtbot, clashing)
+
+    asked: list[list[str]] = []
+
+    def ask(playset: Playset, plays_it: Playset, saves: list[Save], changes: str) -> None:
+        asked.append([s.folder for s in saves])
+
+    monkeypatch.setattr(clashing, "ask_rebuild", ask)
+    with qtbot.waitSignal(clashing.saves_found, timeout=10_000):
+        clashing.build_action.trigger()
+        # Nothing read on the main thread: the question waits for the scan.
+        assert asked == [] and clashing._build_task is None
+        assert "Reading your saves" in clashing.statusBar().currentMessage()
+    assert asked == [[UNE]]  # then asked; cancelling it built nothing
+    assert clashing._build_task is None
+
+
+def test_a_waiting_rebuild_is_dropped_when_another_playset_is_chosen(
+    qtbot: QtBot, clashing: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build(qtbot, clashing)
+    clashing.bind_saves([UNE], built_playset(clashing).id)
+    clashing.playset_list.setCurrentRow(1)
+    saves_not_read_yet(qtbot, clashing)
+
+    def no_question(*args: object) -> None:
+        raise AssertionError("asked about a playset no longer chosen")
+
+    monkeypatch.setattr(clashing, "ask_rebuild", no_question)
+    with qtbot.waitSignal(clashing.saves_found, timeout=10_000):
+        clashing.build_action.trigger()
+        clashing.playset_list.setCurrentRow(2)
+    assert clashing._build_task is None
+    assert "Build cancelled" in clashing.statusBar().currentMessage()
