@@ -75,6 +75,24 @@ from cold_steel.core.build import (
     save_record,
 )
 from cold_steel.core.conflicts import ConflictFinder, Found
+from cold_steel.core.empires import (
+    Added,
+    Catalog,
+    EmpireLists,
+    FormatError,
+    build_catalog,
+    check_empire,
+    empire_needs,
+    first_lists,
+    format_problem,
+    game_file_for,
+    in_game,
+    list_owner,
+    plays_a_build,
+    playset_mods,
+    shelve_outside_changes,
+    take_back,
+)
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
 from cold_steel.core.hide import hidden_file, hidden_now, restore
@@ -98,7 +116,14 @@ from cold_steel.core.patch import (
     with_patch_last,
     write_patch,
 )
-from cold_steel.core.play import HidePlan, PlayError, PlayPlan, plan_play, play
+from cold_steel.core.play import (
+    EmpiresPlan,
+    HidePlan,
+    PlayError,
+    PlayPlan,
+    plan_play,
+    play,
+)
 from cold_steel.core.playsets import PlaysetBook, as_played, missing_mods
 from cold_steel.core.resolve import ResolutionBook, choices_digest, copy_resolutions
 from cold_steel.core.saves import (
@@ -136,10 +161,12 @@ from cold_steel.core.sync import (
 )
 from cold_steel.paradox import processes
 from cold_steel.paradox.continue_game import ContinueGame
+from cold_steel.paradox.empires import Empire, empire_file
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
 from cold_steel.paradox.save import autosaves_to_cloud, local_save_dir
 from cold_steel.store import paths
+from cold_steel.store.empires import LOOSE, empires_dir, old_bindings_file, state_file
 from cold_steel.store.playsets import Pin, Playset, PlaysetEntry, playsets_file
 from cold_steel.store.resolutions import resolutions_dir, resolutions_file
 from cold_steel.store.saves import bindings_file
@@ -148,6 +175,7 @@ from cold_steel.ui import icons
 from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
+from cold_steel.ui.empires_dialog import LOOSE_NAME, EmpireRow, EmpiresDialog, OtherList
 from cold_steel.ui.errors_dialog import ErrorsDialog
 from cold_steel.ui.full_text import line_count, show_full_text
 from cold_steel.ui.health_dialog import HealthDialog
@@ -178,6 +206,9 @@ TAGS_SHARE = 0.75
 WIDEST_HEALTH = "99 warnings"
 # Old copies named above the mod list; Conflicts lists the rest.
 OLD_COPIES_SHOWN = 3
+# The window's starting size, with room for every button on the playset bar.
+# It's also the least width the window keeps when it sizes itself to the mod list.
+START_WIDTH, START_HEIGHT = 1350, 760
 
 
 class MainWindow(QMainWindow):
@@ -203,6 +234,8 @@ class MainWindow(QMainWindow):
     build_finished = Signal(object)
     # The save folders were read: every Save, newest first. For tests.
     saves_found = Signal(object)
+    # Which mods define each thing an empire uses: the Catalog, found again.
+    empires_checked = Signal(object)
 
     def __init__(
         self,
@@ -220,11 +253,13 @@ class MainWindow(QMainWindow):
         build_dir: Path | None = None,
         saves_path: Path | None = None,
         hidden_path: Path | None = None,
+        empire_lists_dir: Path | None = None,
+        empires_state_path: Path | None = None,
         settings: Settings | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
-        self.resize(1200, 760)
+        self.resize(START_WIDTH, START_HEIGHT)
         self.settings = settings or Settings()
 
         self.tasks = TaskRunner(self)
@@ -274,9 +309,19 @@ class MainWindow(QMainWindow):
         self._bind_played = False  # the next save scan does that binding
         # hidden.json: the saves of other playsets that Play hid from the game.
         self._hidden_path = hidden_path or hidden_file()
-        # Saves were left hidden by an earlier run while the game was running:
-        # they're put back once it closes.
+        # Each playset's empire list. On with the saves features (decision 97).
+        self._empire_lists_dir = empire_lists_dir or empires_dir()
+        # empires_in_game.json: whose list the game's empire file holds.
+        self._empires_state = empires_state_path or state_file()
+        # Which mods define each thing an empire uses. None until first checked.
+        self._catalog: Catalog | None = None
+        self._catalog_task: Task | None = None
+        self._empires_dialog: EmpiresDialog | None = None
+        self._empire_source = LOOSE  # the list the Empires window imports from
+        # Saves left hidden, or an empire list left in the game, by an earlier
+        # run while the game was running: dealt with once it closes.
         self._restore_waiting = False
+        self._hidden_checked = False  # the first scan looks for those
         # What to do with the built playset's saves once the running build succeeds.
         self._rebuild: RebuildChoice | None = None
         # The playset whose Build waits for the saves to be read, to ask about them.
@@ -290,6 +335,7 @@ class MainWindow(QMainWindow):
         self._thumbnail_cache = thumbnail_cache or paths.cache_dir() / "thumbnails"
         self._playsets_path = playsets_path or playsets_file()
         self.backup_dir = backup_dir or paths.data_dir() / "backups"
+        self.empire_lists = EmpireLists(self._empire_lists_dir, self.backup_dir)
         self.book: PlaysetBook | None = None
         # Writes dlc_load.json (and continue_game.json when the plan names a save),
         # then starts the game. Tests swap in a stand-in.
@@ -351,6 +397,7 @@ class MainWindow(QMainWindow):
         self.continue_action = action("Con&tinue", self.continue_playset)
         self.continue_action.setEnabled(False)
         self.saves_action = action("S&aves…", self.show_saves)
+        self.empires_action = action("E&mpires…", self.show_empires)
         self.errors_action = action("&Errors from the last game…", self.show_errors, "Ctrl+E")
         self.errors_action.setEnabled(False)
         self.conflicts_action = action("&Conflicts…", self.show_conflicts, "Ctrl+K")
@@ -371,6 +418,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.delete_action)
         menu.addSeparator()
         menu.addActions([self.play_action, self.continue_action, self.saves_action])
+        menu.addAction(self.empires_action)
         menu.addActions([self.errors_action, self.conflicts_action])
         menu.addAction(self.delete_patch_action)
         menu.addActions([self.sort_action, self.dlc_action])
@@ -462,6 +510,8 @@ class MainWindow(QMainWindow):
         playset_bar.addWidget(self._button("Build", self.build_action))
         self.saves_button = self._button("Saves", self.saves_action)
         playset_bar.addWidget(self.saves_button)
+        self.empires_button = self._button("Empires", self.empires_action)
+        playset_bar.addWidget(self.empires_button)
         playset_bar.addStretch()
         playset_bar.addWidget(self._button("Export to launcher", self.export_action))
         playset_bar.addWidget(self._button("Open in launcher", self.open_launcher_action))
@@ -635,7 +685,9 @@ class MainWindow(QMainWindow):
                 problems.append(f"Your saves couldn't be loaded: {error}")
             else:
                 problems += self.bindings.problems
-            self._put_back_saves()  # left hidden if Cold Steel closed while the game ran
+        if not self._hidden_checked:
+            self._hidden_checked = True
+            self._put_back_hidden()  # left hidden if Cold Steel closed while the game ran
         playsets = self.book.playsets if self.book else ()
         self.model.set_library(library, missing_mods(playsets, library))
         self.filter.set_playsets(playsets)
@@ -657,6 +709,8 @@ class MainWindow(QMainWindow):
         self._check_old_copies()
         self._read_saves_setting()
         self._scan_saves()
+        if self._empires_dialog is not None and self._empires_dialog.isVisible():
+            self._check_empires()  # a mod may have changed
         self._show_finished_build()
         self.library_shown.emit(library)
 
@@ -948,6 +1002,7 @@ class MainWindow(QMainWindow):
             self.dlc_action,
             self.play_action,
             self.saves_action,
+            self.empires_action,
             self.conflicts_action,
             self.pins_action,
             self.build_action,
@@ -987,6 +1042,7 @@ class MainWindow(QMainWindow):
         self._show_pin_state(playset)
         self._show_launcher_state(playset)
         self._show_saves(playset)
+        self._show_empires(playset)
         self._check_old_copies()
 
     # Changing playsets
@@ -1036,6 +1092,11 @@ class MainWindow(QMainWindow):
         if name:
             copy = self.book.copy(playset.id, name)
             copy_resolutions(playset.id, copy.id, self._choices_dir)
+            if not plays_a_build(playset):  # a built playset's copy uses its source's list too
+                try:
+                    self.empire_lists.copy_list(playset.id, copy.id)
+                except OSError as error:
+                    self.tell("Copy playset", f"Its empires weren't copied: {error}")
             self._reload_playsets(copy.id)
 
     def rename_playset(self) -> None:
@@ -1055,7 +1116,8 @@ class MainWindow(QMainWindow):
             f"Delete \u201c{playset.name}\u201d? Your mods stay installed. "
             "The launcher's copy, if it has one, isn't touched. Its patch mod, its "
             "build and its pinned copies are deleted, unless another playset uses them."
-            + self._saves_unbound_text(playset),
+            + self._saves_unbound_text(playset)
+            + self._empires_trashed_text(playset),
         ):
             self._forget_playset(playset)
             self._reload_playsets("")
@@ -1068,6 +1130,8 @@ class MainWindow(QMainWindow):
         self.book.delete(playset.id)
         if self.bindings is not None:
             self.bindings.forget_playset(playset.id)
+        if not plays_a_build(playset) and (empires := self.empire_lists.path(playset.id)).exists():
+            self.trash(empires)
         resolutions_file(playset.id, self._choices_dir).unlink(missing_ok=True)
         game = self.library.game if self.library else None
         if game is not None:
@@ -1421,6 +1485,7 @@ class MainWindow(QMainWindow):
             continue_from=continue_from,
             skip_menu=skip_menu and continue_from is not None,
             hide=self._hide_plan(playset),
+            empires=self._empires_plan(playset),
         )
         if plan.skipped and not self.confirm(
             "Some mods aren't installed",
@@ -1458,16 +1523,60 @@ class MainWindow(QMainWindow):
         others = self.bindings.bound_elsewhere(playset.id, {p.id for p in self.book.playsets})
         return HidePlan(tuple(sorted(others)), self._hidden_path) if others else None
 
-    def _put_back_saves(self) -> None:
-        """Move back the saves Play hid, once the game isn't running."""
-        if not hidden_now(self._hidden_path):
-            return
-        if processes.running(processes.GAME):
+    def _empires_plan(self, playset: Playset) -> EmpiresPlan | None:
+        """The playset's empire list, to give the game as its empire file, when
+        its autosaves stay local (decision 97)."""
+        game_file = self._game_empire_file()
+        if game_file is None or not self.saves_on:
+            return None
+        self._sync_empires()  # the first lists, and changes made outside Cold Steel
+        return EmpiresPlan(self.empire_lists, list_owner(playset), game_file, self._empires_state)
+
+    def _put_back_hidden(self) -> None:
+        """Put back the saves Play hid, and copy the game's empire file back into
+        the list Play gave it, once the game isn't running."""
+        waiting = hidden_now(self._hidden_path) or in_game(self._empires_state)
+        if waiting and processes.running(processes.GAME):
             # Started before Cold Steel was, or by an earlier run of it: wait for it to close.
             self._restore_waiting = True
             self._game_timer.start()
             return
         self._restore_waiting = False
+        self._put_back_saves()
+        self._take_back_empires()
+        self._sync_empires()
+
+    def _take_back_empires(self) -> None:
+        """Copy the game's empire file back into the list Play gave it."""
+        if not in_game(self._empires_state):
+            return
+        book = self.book
+
+        def exists(playset_id: str) -> bool:
+            return book is not None and book.get(playset_id) is not None
+
+        try:
+            game = self.library.game.version if self.library else ""
+            result = take_back(self.empire_lists, self._empires_state, exists, game)
+        except OSError as error:
+            self.tell(
+                "Empires",
+                f"The game's empires couldn't be copied back into their playset's list: {error}"
+                "\n\nCold Steel tries again when it next starts.",
+            )
+            return
+        if result is not None and result.new:
+            owner = book.get(result.owner) if book else None
+            where = owner.name if owner and not result.loose else LOOSE_NAME
+            self.statusBar().showMessage(
+                f"Empire(s) made or changed in game, kept in {where}: {', '.join(result.new)}"
+            )
+        self._show_empires(self.selected_playset())
+
+    def _put_back_saves(self) -> None:
+        """Move back the saves Play hid. The game isn't running."""
+        if not hidden_now(self._hidden_path):
+            return
         result = restore(self._hidden_path)
         if result.stuck:
             listed = "\n".join(f"  {f}" for f in result.stuck)
@@ -1522,7 +1631,7 @@ class MainWindow(QMainWindow):
         if self._game is None:
             if self._restore_waiting and not processes.running(processes.GAME):
                 self._game_timer.stop()
-                self._put_back_saves()
+                self._put_back_hidden()
                 self._read_saves_setting()
                 self._scan_saves()
             return
@@ -1530,10 +1639,10 @@ class MainWindow(QMainWindow):
             return
         self._game_timer.stop()
         self._game = None
-        self._put_back_saves()
+        self._read_saves_setting()  # it may have been changed in the game
+        self._put_back_hidden()
         self.statusBar().showMessage("Stellaris closed. Reading its error log…")
         self._read_errors(show=False)
-        self._read_saves_setting()  # it may have been changed in the game
         self._bind_played = self.saves_on
         self._scan_saves()
 
@@ -1953,14 +2062,19 @@ class MainWindow(QMainWindow):
         on = data_dir is not None and autosaves_to_cloud(data_dir) is False
         came_on = on and not self.saves_on
         self.saves_on = on
-        for act in (self.saves_action, self.continue_action):
+        for act in (self.saves_action, self.continue_action, self.empires_action):
             act.setVisible(on)
         self.saves_button.setVisible(on)
         self.continue_button.setVisible(on)
+        self.empires_button.setVisible(on)
         if not on:
             self.saves_label.hide()
-            if self._saves_dialog is not None:
-                self._saves_dialog.hide()
+            for dialog in (self._saves_dialog, self._empires_dialog):
+                if dialog is not None:
+                    dialog.hide()
+        elif came_on:
+            self._sync_empires()
+            self._show_empires(self.selected_playset())
         return came_on
 
     def show_saves(self) -> None:
@@ -2072,6 +2186,276 @@ class MainWindow(QMainWindow):
             f" Its {count} saves are unbound from it. Their files stay where they are."
             if count > 1
             else " Its save is unbound from it. The files stay where they are."
+        )
+
+    # Empires
+
+    def _game_empire_file(self) -> Path | None:
+        if self.library is None:
+            return None
+        data_dir = self.library.game.data_dir
+        return game_file_for(empire_file(data_dir), data_dir)
+
+    def _sync_empires(self) -> None:
+        """Make the first lists, then keep empires changed in the game's file
+        outside Cold Steel in the loose list. Only with the empires features on,
+        and the game closed."""
+        game_file, book = self._game_empire_file(), self.book
+        if (
+            game_file is None
+            or book is None
+            or not self.saves_on
+            or self._game is not None
+            or in_game(self._empires_state)
+            or processes.running(processes.GAME)
+        ):
+            return
+        owners = {p.id: list_owner(p) for p in book.playsets}
+        lists = self.empire_lists
+        try:
+            old = old_bindings_file(self._empire_lists_dir)
+            first_lists(lists, game_file, self._empires_state, old, owners)
+            shelved = shelve_outside_changes(lists, game_file, self._empires_state)
+        except OSError as error:
+            self.statusBar().showMessage(f"Reading the game's empires failed: {error}")
+            return
+        if shelved:
+            self.statusBar().showMessage(
+                f"Empires found in the game, now under {LOOSE_NAME}: {', '.join(shelved)}"
+            )
+
+    def _read_list(self, owner: str) -> tuple[Empire, ...]:
+        try:
+            return self.empire_lists.read(owner).empires
+        except OSError:
+            return ()
+
+    def show_empires(self) -> None:
+        """Open the Empires window for the selected playset, and check which mods
+        each empire needs."""
+        playset = self.selected_playset()
+        if playset is None or self.library is None or not self.saves_on:
+            return
+        dialog = self._empires_dialog
+        if dialog is None:
+            dialog = self._empires_dialog = EmpiresDialog(self)
+            dialog.export_requested.connect(self.export_empires)
+            dialog.import_requested.connect(self.import_empires)
+            dialog.remove_requested.connect(self.remove_from_list)
+            dialog.delete_requested.connect(self.delete_loose_empires)
+            dialog.source_chosen.connect(self._empire_source_chosen)
+        self._sync_empires()
+        self._show_empires(playset, opening=True)
+        self.show_dialog(dialog)
+        self._check_empires()
+
+    def _check_empires(self) -> None:
+        """Find which mods define each thing an empire can use, off the main thread.
+        Unchanged mods come from the index's cache, and their catalog is kept."""
+        library = self.library
+        if library is None or not self.saves_on:
+            return
+        if self._catalog_task is not None:
+            self._catalog_task.cancel()
+        cache, index, catalog = self._index_cache, self._index, self._catalog
+
+        def job(ctx: JobContext) -> tuple[Index, Catalog]:
+            found = Indexer(library, cache, index)(ctx)
+            ctx.progress(0, 0, "Checking which mods your empires need")
+            return found, build_catalog(found, catalog)
+
+        task = self.tasks.start(job)
+        self._catalog_task = task
+        task.succeeded.connect(lambda result: self._empires_found(result, task))
+        task.failed.connect(lambda error: self._empires_failed(error, task))
+
+    def _empires_found(self, result: tuple[Index, Catalog], task: Task) -> None:
+        if task is not self._catalog_task:
+            return  # a newer check replaced this one
+        self._catalog_task = None
+        self._index, self._catalog = result
+        self._show_empires(self.selected_playset())
+        self.empires_checked.emit(self._catalog)
+
+    def _empires_failed(self, error: Exception, task: Task) -> None:
+        if task is not self._catalog_task:
+            return
+        self._catalog_task = None
+        self.statusBar().showMessage(f"Checking which mods your empires need failed: {error}")
+
+    def _empire_rows(self, empires: Sequence[Empire], playset: Playset) -> list[EmpireRow]:
+        """Each empire, checked against the playset's mods once the catalog is known."""
+        catalog = self._catalog
+        if catalog is None:
+            return [EmpireRow(e) for e in empires]
+        mods = playset_mods(playset, self._build_dir)
+        return [
+            EmpireRow(e, check_empire(empire_needs(e.info, catalog), mods) if e.info else None)
+            for e in empires
+        ]
+
+    def _show_empires(self, playset: Playset | None, *, opening: bool = False) -> None:
+        """The Empires button's count, and the Empires window if it's open."""
+        if not self.saves_on or playset is None:
+            return
+        owner = list_owner(playset)
+        mine = self._read_list(owner)
+        self.empires_button.setText(f"Empires ({len(mine)})" if mine else "Empires")
+        dialog, book = self._empires_dialog, self.book
+        if dialog is None or book is None or not (opening or dialog.isVisible()):
+            return
+        others = [OtherList(LOOSE, LOOSE_NAME, len(self._read_list(LOOSE)))]
+        others += [
+            OtherList(p.id, p.name, len(self._read_list(p.id)))
+            for p in sorted(book.playsets, key=lambda p: (p.name.casefold(), p.id))
+            if p.id != owner and not plays_a_build(p)
+        ]
+        if self._empire_source not in {o.owner for o in others}:
+            self._empire_source = LOOSE
+        source = book.get(owner) if owner != playset.id else None
+        game_file = self._game_empire_file()
+        problem = format_problem(self.empire_lists, owner, game_file) if game_file else ""
+        dialog.set_state(
+            playset.name,
+            self._empire_rows(mine, playset),
+            others,
+            self._empire_source,
+            self._empire_rows(self._read_list(self._empire_source), playset),
+            self.mod_names(),
+            checking=self._catalog is None,
+            built_from=source.name if source else "",
+            locked=in_game(self._empires_state) == owner,
+            format_problem=problem,
+        )
+
+    def _empire_source_chosen(self, owner: str) -> None:
+        self._empire_source = owner
+        self._show_empires(self.selected_playset())
+
+    def _list_name(self, owner: str) -> str:
+        found = self.book.get(owner) if self.book and owner != LOOSE else None
+        return found.name if found else LOOSE_NAME
+
+    def _locked(self, owner: str, title: str) -> bool:
+        """The game is running with this list: say so. It can't change until it closes."""
+        if in_game(self._empires_state) != owner:
+            return False
+        self.tell(
+            title,
+            f"Stellaris is running with the empires of {self._list_name(owner)}. "
+            "Change them once it closes.",
+        )
+        return True
+
+    def export_empires(self, names: Sequence[str], target: str) -> None:
+        """Copy empires from the selected playset's list to another playset's."""
+        playset, book = self.selected_playset(), self.book
+        if playset is None or book is None or not names or self._locked(target, "Export"):
+            return
+        empires = [e for e in self._read_list(list_owner(playset)) if e.name in names]
+        target_playset = book.get(target)
+        if target_playset is not None and self._catalog is not None:
+            rows = self._empire_rows(empires, target_playset)
+            lacking = [r.empire.name for r in rows if r.check is not None and not r.check.ok]
+            if lacking and not self.confirm(
+                "Export",
+                f"{target_playset.name} lacks mods these empires use:\n"
+                + "\n".join(f"  {n}" for n in lacking)
+                + "\n\nExport anyway?",
+            ):
+                return
+        self._copy_empires(empires, list_owner(playset), target)
+
+    def import_empires(self, names: Sequence[str], source: str) -> None:
+        """Copy empires from another list into the selected playset's. From the
+        loose list, they move."""
+        playset = self.selected_playset()
+        if playset is None or not names:
+            return
+        owner = list_owner(playset)
+        if self._locked(owner, "Import"):
+            return
+        empires = [e for e in self._read_list(source) if e.name in names]
+        result = self._copy_empires(empires, source, owner)
+        if result is not None and source == LOOSE:
+            try:
+                self.empire_lists.remove(LOOSE, {*result.added, *result.replaced})
+            except OSError as error:
+                self.tell("Import", f"They're copied, but still under {LOOSE_NAME}: {error}")
+            self._show_empires(playset)
+
+    def _copy_empires(self, empires: Sequence[Empire], source: str, target: str) -> Added | None:
+        """Copy empires from one list into another. If it has some of the same
+        name, ask whether to replace them or skip these."""
+        name = self._list_name(target)
+        have = set(self.empire_lists.read(target).names) if empires else set()
+        same = [e.name for e in empires if e.name in have]
+        replace = bool(same) and self.confirm(
+            "Same name",
+            f"{name} already has empires of these names:\n"
+            + "\n".join(f"  {n}" for n in same)
+            + "\n\nReplace them? No keeps the ones there, and skips these.",
+        )
+        fmt = self.empire_lists.info(source).format
+        try:
+            result = self.empire_lists.add(target, empires, replace=replace, format=fmt)
+        except (OSError, FormatError) as error:
+            self.tell("Empires", f"The empires weren't copied to {name}. {error}")
+            return None
+        copied = len(result.added) + len(result.replaced)
+        skipped = f", {len(result.skipped)} skipped" if result.skipped else ""
+        self.statusBar().showMessage(f"{copied} empire(s) copied to {name}{skipped}")
+        self._show_empires(self.selected_playset())
+        return result
+
+    def remove_from_list(self, names: Sequence[str]) -> None:
+        """Take empires out of the selected playset's list, after asking."""
+        playset = self.selected_playset()
+        if playset is None or not names:
+            return
+        owner = list_owner(playset)
+        if self._locked(owner, "Remove empires"):
+            return
+        listed = "\n".join(f"  {n}" for n in names)
+        if not self.confirm(
+            "Remove empires",
+            f"Remove these empires from {self._list_name(owner)}?\n{listed}\n\n"
+            "Other playsets keep their own copies. A backup of the list is kept in "
+            f"{paths.shown(self.empire_lists.backup_dir)}.",
+        ):
+            return
+        self._remove(owner, names)
+
+    def delete_loose_empires(self, names: Sequence[str]) -> None:
+        """Delete empires that are in no playset's list, after asking."""
+        listed = "\n".join(f"  {n}" for n in names)
+        if names and self.confirm(
+            "Delete empires",
+            f"Delete these empires for good?\n{listed}\n\n"
+            f"A backup is kept in {paths.shown(self.empire_lists.backup_dir)}.",
+        ):
+            self._remove(LOOSE, names)
+
+    def _remove(self, owner: str, names: Sequence[str]) -> None:
+        try:
+            gone = self.empire_lists.remove(owner, set(names))
+        except OSError as error:
+            self.tell("Empires", f"The empires weren't removed: {error}")
+            return
+        self.statusBar().showMessage(f"Removed {len(gone)} empire(s) from {self._list_name(owner)}")
+        self._show_empires(self.selected_playset())
+
+    def _empires_trashed_text(self, playset: Playset) -> str:
+        """For a confirm box: what happens to a playset's empires when it goes."""
+        if not self.saves_on or plays_a_build(playset):
+            return ""
+        count = len(self._read_list(playset.id))
+        if not count:
+            return ""
+        return (
+            f" Its list of {count} empires goes to the trash. Other playsets keep their copies."
+            if count > 1
+            else " Its one empire goes to the trash. Other playsets keep their copies."
         )
 
     # Building one mod

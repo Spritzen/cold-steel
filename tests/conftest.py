@@ -138,3 +138,51 @@ def snapshot(root: Path, *, recursive: bool = True) -> Snapshot:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             result[str(path.relative_to(root))] = (st.st_size, st.st_mtime_ns, digest)
     return result
+
+
+def empire_block(name: str, planet: str = "pc_desert", extra: str = "") -> bytes:
+    """One empire as the game writes it: tabs and CRLF line breaks."""
+    text = (
+        f'"{name}"=\n{{\n\tkey="{name}"\n'
+        '\tspecies=\n\t{\n\t\tclass="HUM"\n\t\tspecies_name=\n\t\t{\n\t\t\tkey="Elf"\n'
+        '\t\t\tliteral=yes\n\t\t}\n\t\tname_list="HUMAN3"\n\t\ttrait="trait_venerable"\n\t}\n'
+        '\tauthority="auth_imperial"\n\tgovernment="gov_theocratic_monarchy"\n'
+        f'\tplanet_class="{planet}"\n\tcity_graphical_culture="humanoid_01"\n'
+        '\truler=\n\t{\n\t\ttrait="leader_trait_spark_of_genius"\n\t}\n'
+        '\tethic="ethic_militarist"\n\tethic="ethic_fanatic_spiritualist"\n'
+        '\tcivics=\n\t{\n\t\t"civic_ascensionists"\n\t\t"civic_chosen"\n\t}\n'
+        f'\torigin="origin_life_seeded"\n{extra}}}\n'
+    )
+    return text.replace("\n", "\r\n").encode()
+
+
+def write_empires(data_dir: Path, *blocks: bytes) -> Path:
+    """The game's empire file, holding these empires."""
+    path = data_dir / "user_empire_designs_v3.4.txt"
+    path.write_bytes(b"".join(blocks))
+    return path
+
+
+def add_empire_definitions(game_dir: Path) -> None:
+    """The game's own definitions of what empire_block uses, but for
+    pc_continental, which test mods add."""
+    files = {
+        "common/species_classes/00_species_classes.txt": b"HUM = { }\n",
+        "common/name_lists/HUMAN3.txt": b"HUMAN3 = { }\n",
+        "common/traits/00_traits.txt": (
+            b"trait_venerable = { }\nleader_trait_spark_of_genius = { }\n"
+        ),
+        "common/governments/authorities/00_authorities.txt": b"auth_imperial = { }\n",
+        "common/governments/00_governments.txt": b"gov_theocratic_monarchy = { }\n",
+        "common/governments/civics/00_civics.txt": (
+            b"civic_ascensionists = { }\ncivic_chosen = { }\norigin_life_seeded = { }\n"
+        ),
+        "common/ethics/00_ethics.txt": (
+            b"ethic_militarist = { }\nethic_fanatic_spiritualist = { }\n"
+        ),
+        "common/planet_classes/00_planet_classes.txt": b"pc_desert = { }\n",
+        "common/graphical_culture/00_graphical_culture.txt": b"humanoid_01 = { }\n",
+    }
+    for name, data in files.items():
+        (game_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        (game_dir / name).write_bytes(data)

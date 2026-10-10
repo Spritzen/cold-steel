@@ -4,10 +4,11 @@
     make screenshots PLAYSET="Cold Steel Mix"
 
 It shows the playset you last played, or the one PLAYSET names. The Saves
-window shows the playset with the most saves; it's left out while the game's
-cloud autosaves are on. Run it on the host for the desktop's own style; in
-the container it draws off screen with Qt's plain style. Your playsets and
-save bindings are read from copies, so nothing of yours is changed.
+window shows the playset with the most saves, and the Empires window the one
+with the most empires in its list; both are left out while the game's cloud
+autosaves are on. Run it on the host for the desktop's own style; in the
+container it draws off screen with Qt's plain style. Your playsets, save
+bindings and empire lists are read from copies, so nothing of yours is changed.
 Pictures go in screenshots/.
 """
 
@@ -20,6 +21,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
+from cold_steel.core.empires import list_owner
 from cold_steel.core.library import Scanner
 from cold_steel.core.saves import bound_saves
 from cold_steel.paradox.save import autosaves_to_cloud
@@ -39,9 +41,11 @@ def main() -> int:
     wanted = parser.parse_args().playset
     OUT.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="cold-steel-shots-"))
-    for name in ("playsets.json", "saves.json"):
+    for name in ("playsets.json", "saves.json", "empires.json", "empires_in_game.json"):
         if (mine := paths.data_dir() / name).exists():
             shutil.copy(mine, scratch / name)
+    if (lists := paths.data_dir() / "empires").is_dir():
+        shutil.copytree(lists, scratch / "empires")
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Cold Steel")
@@ -52,6 +56,8 @@ def main() -> int:
         backup_dir=scratch / "backups",
         saves_path=scratch / "saves.json",
         hidden_path=scratch / "hidden.json",
+        empire_lists_dir=scratch / "empires",
+        empires_state_path=scratch / "empires_in_game.json",
         settings=settings,
     )
 
@@ -113,7 +119,7 @@ def main() -> int:
         book, bindings, saves = window.book, window.bindings, window.saves
         if not (window.saves_on and book and bindings and saves):
             print("No saves to show (cloud autosaves on, or none found): skipped the Saves window.")
-            app.quit()
+            take_empires()
             return
         most = max(book.playsets, key=lambda p: len(bound_saves(saves, bindings, p.id)))
         select(most.id)
@@ -129,6 +135,35 @@ def main() -> int:
             for theme in ("light", "dark"):
                 apply_theme(app, theme)
                 save(dialog, f"saves-{theme}")
+            dialog.close()
+        take_empires()
+
+    def take_empires() -> None:
+        book = window.book
+        if not (window.saves_on and book):
+            print("Cloud autosaves are on: skipped the Empires window.")
+            app.quit()
+            return
+        window._sync_empires()  # the first lists, in the copies
+        count = {p.id: len(window._read_list(list_owner(p))) for p in book.playsets}
+        if max(count.values(), default=0):
+            select(max(count, key=lambda pid: count[pid]))
+        else:  # no lists yet: show the playset above, with the empires to import below
+            select_playset()
+        shown = window.selected_playset()
+        others = {pid: n for pid, n in count.items() if shown is None or pid != list_owner(shown)}
+        if not window._read_list("loose") and max(others.values(), default=0):
+            # Nothing to import from Not in any playset: show another playset's list there.
+            window._empire_source = max(others, key=lambda pid: others[pid])
+        window.empires_checked.connect(lambda _: QTimer.singleShot(500, empires_ready))
+        window.show_empires()
+
+    def empires_ready() -> None:
+        dialog = window._empires_dialog
+        if dialog is not None:
+            for theme in ("light", "dark"):
+                apply_theme(app, theme)
+                save(dialog, f"empires-{theme}")
         app.quit()
 
     def library_ready() -> None:
