@@ -1,8 +1,12 @@
-"""Which playsets each empire belongs to, saved as `~/.local/share/cold-steel/empires.json`.
+"""Each playset's empire list, kept in `~/.local/share/cold-steel/empires/`.
 
-Keyed by the empire's name, its key in the game's empire file. An empire can
-belong to several playsets (decision 96). Losing this file loses nothing in
-game: only the links between empires and playsets.
+    empires/<playset id>.txt   one playset's empires, in the game's own format
+    empires/loose.txt          empires that are in no playset's list yet
+    empires_in_game.json       whose list the game's empire file holds
+
+A list is the game's empire file for that playset: Play copies it into the
+game, and copies the game's file back when the game closes (decision 107).
+Each empire's block is kept byte for byte, as the game wrote it.
 """
 
 from pathlib import Path
@@ -12,29 +16,43 @@ import msgspec
 from cold_steel.store import paths
 from cold_steel.store.files import load_json, save_json
 
-EMPIRES_VERSION = 1
+STATE_VERSION = 1
+LOOSE = "loose"  # the name of the list of empires in no playset's list
 
 
-class EmpireBinding(msgspec.Struct, frozen=True):
-    # The ids of the playsets it belongs to. Empty: you unbound it from the
-    # last one, so it's never suggested for a playset again.
-    playsets: tuple[str, ...] = ()
-    bound: str = ""  # when it was last bound, as "2026-10-10 14:03"
+class EmpireState(msgspec.Struct):
+    """Whose list the game's empire file holds, as Cold Steel last left it."""
+
+    version: int = STATE_VERSION
+    owner: str = ""  # the id of the playset whose list is in the game's file; "" for none
+    file: str = ""  # the game's empire file
+    digest: int = 0  # xxhash of that file's bytes, when Cold Steel last wrote or read it
+    running: bool = False  # Play put the list in, and the game hasn't closed since
 
 
-class EmpireBindingsFile(msgspec.Struct):
-    version: int = EMPIRES_VERSION
-    empires: dict[str, EmpireBinding] = msgspec.field(default_factory=dict)  # by name
+def empires_dir() -> Path:
+    return paths.data_dir() / "empires"
 
 
-def empire_bindings_file() -> Path:
-    return paths.data_dir() / "empires.json"
+def list_file(owner: str, root: Path) -> Path:
+    """A playset's empire list, or the loose one."""
+    return root / f"{owner}.txt"
 
 
-def load_empire_bindings(path: Path | None = None) -> EmpireBindingsFile | None:
-    """None when there's no file yet, or it can't be read."""
-    return load_json(path or empire_bindings_file(), EmpireBindingsFile)
+def state_file() -> Path:
+    return paths.data_dir() / "empires_in_game.json"
 
 
-def save_empire_bindings(data: EmpireBindingsFile, path: Path | None = None) -> None:
-    save_json(path or empire_bindings_file(), data)
+def old_bindings_file(root: Path) -> Path:
+    """Where an earlier build of Phase 9 kept empire bindings, beside the lists'
+    folder `root`. Read once, to make the first lists, then renamed."""
+    return root.parent / "empires.json"
+
+
+def load_state(path: Path) -> EmpireState:
+    """An empty state when there's no file yet, or it can't be read."""
+    return load_json(path, EmpireState) or EmpireState()
+
+
+def save_state(state: EmpireState, path: Path) -> None:
+    save_json(path, state)

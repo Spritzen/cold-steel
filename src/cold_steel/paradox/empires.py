@@ -132,20 +132,22 @@ def write_empire_file(path: Path, data: bytes, backup_dir: Path) -> None:
 
 
 class EmpireReader:
-    """Reads the empire file again only when its size or timestamp changed."""
+    """Reads an empire file, or a playset's list, again only when its size or
+    timestamp changed."""
 
     def __init__(self) -> None:
-        self._held: tuple[Path, tuple[int, int], EmpireFile] | None = None
+        # By path: size, timestamp and inode (each atomic write makes a new one).
+        self._held: dict[Path, tuple[tuple[int, int, int], EmpireFile]] = {}
 
     def read(self, path: Path) -> EmpireFile:
         """Raises OSError if it can't be read."""
         st = path.stat()
-        stamp = st.st_size, st.st_mtime_ns
-        held = self._held
-        if held is not None and held[0] == path and held[1] == stamp:
-            return held[2]
+        stamp = st.st_size, st.st_mtime_ns, st.st_ino
+        held = self._held.get(path)
+        if held is not None and held[0] == stamp:
+            return held[1]
         found = read_empire_file(path)
-        self._held = path, stamp, found
+        self._held[path] = stamp, found
         return found
 
 

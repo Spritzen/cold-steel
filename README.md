@@ -188,23 +188,24 @@ Until you turn them off in the game's settings, none of this shows.
 
 The game keeps every empire you design in one list, whatever mods you play
 with. An empire made with a mod's planet class still shows in a playset
-without that mod. Cold Steel ties each empire to the playsets it works in.
+without that mod, and the game can change it there. In Cold Steel, each
+playset has its own list of empires, and the game gets exactly that list.
 Like saves, **this needs the game's cloud autosaves turned off.**
 
 ![The Empires window: a playset's empires, each marked with the mods it needs](screenshots/empires-dark.png)
 
-- **Empires…** lists the empires bound to the playset, then the unbound ones,
-  which show in every playset. Each is marked ✓ when the playset has every mod
-  it uses, or ⚠ with the mods it lacks.
-- An empire you make or change in a game started with **▶ Play** belongs to
-  that playset when the game closes. Older empires are suggested for each
-  playset that has every mod they need: **Bind all suggested** takes them.
-  Right-click binds an empire to another playset, unbinds it or deletes it.
-- An empire can belong to several playsets. A built playset also shows the
-  empires of the playset it was built from, and an empire you make while
-  playing it belongs to both.
-- **Play and Continue keep other playsets' empires out of the game's empire
-  list**, and put them back when the game closes.
+- **Empires…** shows the playset's list. Each empire is marked ✓ when the
+  playset has every mod it uses, or ⚠ with the mods it lacks.
+- **▶ Play** and **Continue** give the game the playset's list. An empire you
+  make, change or delete in game is kept in that list when the game closes,
+  and no other playset sees the change.
+- **Import from** copies empires from another playset's list. **Export to
+  playset** copies them to another, and asks first if it lacks mods they use.
+  An empire of the same name asks whether to replace it or skip.
+- Empires that are in no playset's list are under **Not in any playset**:
+  the ones you had before, and any made in a game started from the launcher.
+  Import them into a playset, or delete them.
+- A built playset uses the list of the playset it was built from.
 
 ### Share playsets
 
@@ -262,13 +263,10 @@ never downloads anything. It changes Paradox's files only when you ask:
   other playsets' saves from `save games/` to `cold_steel_hidden_saves/`
   beside it while the game runs, then move them back. No file in them
   changes. If Cold Steel closes first, it moves them back when it next starts.
-- **Play** and **Continue**, with cloud autosaves off, also take other
-  playsets' empires out of the game's empire file while the game runs, keeping
-  each one, byte for byte, in `~/.local/share/cold-steel/hidden_empires.txt`.
-  When the game closes they're added back to whatever it left in the file. An
-  empire is never overwritten by one of the same name.
-- **Delete…** in the Empires window removes that empire from the game's
-  empire file, after asking.
+- **Play** and **Continue**, with cloud autosaves off, replace the game's
+  empire file with the playset's list of empires, and copy it back into the
+  list when the game closes. Each empire is copied byte for byte. If Cold
+  Steel closes first, it copies it back when it next starts.
 - **Export to launcher** and **Open in launcher** write the playset into the
   launcher's database. **Sync launcher** writes all of them, and removes the
   launcher's others.
@@ -287,7 +285,7 @@ launcher or the game is open.
 | Folder | What's in it |
 |---|---|
 | `~/.config/cold-steel/` | Your settings |
-| `~/.local/share/cold-steel/` | Your playsets, which playset each save and empire belongs to, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
+| `~/.local/share/cold-steel/` | Your playsets, which playset each save belongs to, each playset's empires, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
 | `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## What it won't do

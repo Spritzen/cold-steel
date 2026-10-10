@@ -1,34 +1,31 @@
-"""Empires: the empire file, bindings, which mods each needs, and hiding them."""
+"""Empires: the empire file, each playset's list, which mods each empire needs,
+and handing a list to the game."""
 
-import os
 from pathlib import Path
 
 import pytest
 
 from cold_steel.core.empires import (
-    EmpireBook,
-    bound_empires,
+    EmpireLists,
     build_catalog,
     changed_since,
     check_empire,
     empire_needs,
-    empires_to_hide,
     fingerprints,
-    hidden_names,
-    hide_empires,
+    first_lists,
+    in_game,
+    list_owner,
     playset_mods,
-    read_hidden,
-    remove_empires,
-    restore_empires,
-    shown_for,
-    suggest_empires,
-    unbound_empires,
+    put_in_game,
+    shelve_outside_changes,
+    take_back,
 )
 from cold_steel.core.index import GAME, Indexer
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Scanner
 from cold_steel.paradox.backup import backups_of
 from cold_steel.paradox.empires import (
+    Empire,
     EmpireReader,
     empire_file,
     join_empires,
@@ -36,15 +33,24 @@ from cold_steel.paradox.empires import (
     read_empire_file,
     split_empires,
 )
+from cold_steel.store.empires import LOOSE, load_state
 from cold_steel.store.playsets import Playset, PlaysetEntry
 from conftest import SampleInstall, add_empire_definitions, write_empires
 from conftest import empire_block as block
 
 ALPHA = "workshop:2000000001"
 BETA = "workshop:2000000002"
-
-
 ELVES, HUMANS = block("Divine Elven Order"), block("United Nations of Earth", "pc_continental")
+BUILT = Playset(
+    id="built",
+    name="Main (built)",
+    entries=(PlaysetEntry("local:cold_steel_build_main", True, "Cold Steel build: Main"),),
+)
+
+
+def empires(*blocks: bytes) -> list[Empire]:
+    """Empire records, as read from a file holding these blocks."""
+    return list(parse_empires(Path("x"), b"".join(blocks)).empires)
 
 
 # The empire file
@@ -117,68 +123,149 @@ def test_the_file_is_read_again_only_once_it_changed(tmp_path: Path) -> None:
     assert reader.read(path).names == ("Divine Elven Order", "United Nations of Earth")
 
 
-# Bindings
+# Lists
 
 
-def test_an_empire_can_belong_to_several_playsets(tmp_path: Path) -> None:
-    path = tmp_path / "empires.json"
-    book = EmpireBook.open(path)
-    book.bind(["Elves"], "a")
-    book.bind(["Elves"], "b")
-    book.bind(["Elves"], "a")  # once each
-    assert EmpireBook.open(path).playsets_of("Elves") == ("a", "b")
-    assert book.count("a") == 1
-
-    book.unbind(["Elves"], "a")
-    assert book.playsets_of("Elves") == ("b",)
-    book.unbind(["Elves"], "b")
-    binding = book.get("Elves")
-    assert binding is not None and binding.playsets == ()  # unbound by choice: kept
+def test_a_built_playset_uses_its_sources_list() -> None:
+    assert list_owner(BUILT) == "main"
+    assert list_owner(Playset(id="main", name="Main")) == "main"
 
 
-def test_a_deleted_playset_loses_its_bindings(tmp_path: Path) -> None:
-    book = EmpireBook.open(tmp_path / "empires.json")
-    book.bind(["Elves", "Humans"], "a")
-    book.bind(["Humans"], "b")
-    assert book.forget_playset("a") == 2
-    assert book.get("Elves") is None  # bound to nothing else: unbound, may be suggested
-    assert book.playsets_of("Humans") == ("b",)
+def test_adding_replacing_and_skipping_in_a_list(tmp_path: Path) -> None:
+    lists = EmpireLists(tmp_path / "empires", tmp_path / "backups")
+    assert lists.read("a").empires == ()
+    first = lists.add("a", empires(ELVES, HUMANS), replace=False)
+    assert first.added == ("Divine Elven Order", "United Nations of Earth")
+    assert lists.path("a").read_bytes() == ELVES + HUMANS
+
+    remade = block("Divine Elven Order", "pc_arid")
+    skipped = lists.add("a", empires(remade, block("New")), replace=False)
+    assert skipped.skipped == ("Divine Elven Order",) and skipped.added == ("New",)
+    replaced = lists.add("a", empires(remade), replace=True)
+    assert replaced.replaced == ("Divine Elven Order",)
+    # Replaced in its place; every block byte for byte.
+    assert lists.path("a").read_bytes() == remade + HUMANS + block("New")
+    assert backups_of(lists.path("a"), lists.backup_dir)  # backed up before each write
+
+    assert lists.remove("a", {"United Nations of Earth", "Gone"}) == ("United Nations of Earth",)
+    assert lists.read("a").names == ("Divine Elven Order", "New")
+    lists.copy_list("a", "copy")
+    assert lists.path("copy").read_bytes() == lists.path("a").read_bytes()
+    assert lists.owners() == ["a", "copy"]
 
 
-def test_a_copy_of_a_playset_gets_its_empires(tmp_path: Path) -> None:
-    book = EmpireBook.open(tmp_path / "empires.json")
-    book.bind(["Elves"], "a")
-    book.copy_playset("a", "copy")
-    assert book.playsets_of("Elves") == ("a", "copy")
+# Handing a list to the game
 
 
-def test_an_unreadable_bindings_file_is_kept_aside(tmp_path: Path) -> None:
-    path = tmp_path / "empires.json"
-    path.write_text("{ not json")
-    book = EmpireBook.open(path)
-    assert book.problems and not path.exists()
-    assert len(list(tmp_path.glob("empires.unreadable-*.json"))) == 1
+@pytest.fixture
+def lists(tmp_path: Path) -> EmpireLists:
+    found = EmpireLists(tmp_path / "data/empires", tmp_path / "data/backups")
+    found.root.mkdir(parents=True)
+    return found
 
 
-def test_which_empires_show_and_which_are_hidden(tmp_path: Path) -> None:
-    book = EmpireBook.open(tmp_path / "empires.json")
-    names = ["Mine", "Theirs", "Shared", "Loose", "Orphan"]
-    book.bind(["Mine", "Shared"], "a")
-    book.bind(["Theirs", "Shared"], "b")
-    book.bind(["Orphan"], "gone")  # a playset that no longer exists
-    ids = {"a", "b"}
-    assert bound_empires(book, names, {"a"}) == ["Mine", "Shared"]
-    assert unbound_empires(book, names, ids) == ["Loose", "Orphan"]
-    assert empires_to_hide(book, names, {"a"}, ids) == ["Theirs"]
+def test_play_gives_the_game_exactly_the_playsets_list(lists: EmpireLists, tmp_path: Path) -> None:
+    game = write_empires(tmp_path, ELVES, HUMANS)
+    state = tmp_path / "data/empires_in_game.json"
+    lists.add("a", empires(ELVES), replace=False)
+    lists.add("b", empires(HUMANS), replace=False)
+    shelve_outside_changes(lists, game, state)  # the file as Cold Steel last saw it
+
+    put_in_game(lists, "a", game, state, tmp_path / "backups")
+    assert game.read_bytes() == ELVES
+    assert in_game(state) == "a"
+    (backup,) = backups_of(game, tmp_path / "backups")
+    assert backup.read_bytes() == ELVES + HUMANS
+
+    # In the game: the Elves are changed, and an empire is made.
+    changed, made = block("Divine Elven Order", "pc_arid"), block("Made in Game")
+    game.write_bytes(made + changed)
+    result = take_back(lists, state, lambda _: True)
+    assert result is not None and result.new == ("Made in Game", "Divine Elven Order")
+    assert lists.path("a").read_bytes() == made + changed  # byte for byte, as the game left it
+    assert lists.read("b").names == ("United Nations of Earth",)  # untouched
+    assert in_game(state) == ""
+    assert take_back(lists, state, lambda _: True) is None  # nothing left in the game
 
 
-def test_a_built_playset_shows_the_empires_of_its_source() -> None:
-    built = Playset(
-        id="built",
-        name="Main (built)",
-        entries=(PlaysetEntry("local:cold_steel_build_main", True, "Cold Steel build: Main"),),
+def test_an_empty_list_gives_the_game_an_empty_file(lists: EmpireLists, tmp_path: Path) -> None:
+    game = write_empires(tmp_path, ELVES)
+    state = tmp_path / "data/empires_in_game.json"
+    put_in_game(lists, "empty", game, state, tmp_path / "backups")
+    assert game.read_bytes() == b""
+    # The Elves were in no list: kept under Not in any playset first.
+    assert lists.read(LOOSE).names == ("Divine Elven Order",)
+
+
+def test_a_deleted_playsets_empires_go_to_the_loose_list(
+    lists: EmpireLists, tmp_path: Path
+) -> None:
+    game = write_empires(tmp_path)
+    state = tmp_path / "data/empires_in_game.json"
+    lists.add("a", empires(ELVES), replace=False)
+    put_in_game(lists, "a", game, state, tmp_path / "backups")
+    lists.path("a").unlink()  # the playset was deleted while the game ran
+    result = take_back(lists, state, lambda _: False)
+    assert result is not None and result.loose
+    assert lists.read(LOOSE).names == ("Divine Elven Order",)
+    assert not lists.path("a").exists()
+
+
+def test_empires_changed_outside_cold_steel_go_to_the_loose_list(
+    lists: EmpireLists, tmp_path: Path
+) -> None:
+    game = write_empires(tmp_path, ELVES)
+    state = tmp_path / "data/empires_in_game.json"
+    lists.add("a", empires(ELVES), replace=False)
+    assert shelve_outside_changes(lists, game, state) == ()  # all in a list already
+    assert load_state(state).digest  # the file as it was seen
+
+    # The game was started from the launcher, and an empire made.
+    game.write_bytes(ELVES.replace(b"\t", b"  ") + HUMANS)
+    assert shelve_outside_changes(lists, game, state) == ("United Nations of Earth",)
+    assert lists.read(LOOSE).names == ("United Nations of Earth",)
+    assert shelve_outside_changes(lists, game, state) == ()  # once
+
+
+def test_a_failed_write_leaves_the_game_file_and_list_alone(
+    lists: EmpireLists, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cold_steel.core.empires as core
+
+    game = write_empires(tmp_path, ELVES)
+    state = tmp_path / "data/empires_in_game.json"
+    lists.add("a", empires(ELVES), replace=False)
+
+    def fail(*args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(core, "write_empire_file", fail)
+    with pytest.raises(OSError):
+        put_in_game(lists, "a", game, state, tmp_path / "backups")
+    assert game.read_bytes() == ELVES
+    assert in_game(state) == ""  # nothing to take back
+
+
+def test_the_first_lists_come_from_earlier_bindings(tmp_path: Path) -> None:
+    lists = EmpireLists(tmp_path / "data/empires", tmp_path / "data/backups")
+    game = write_empires(tmp_path, ELVES, HUMANS, block("Korinth"))
+    state = tmp_path / "data/empires_in_game.json"
+    old = tmp_path / "data/empires.json"
+    old.parent.mkdir()
+    old.write_text(
+        '{"version": 1, "empires": {'
+        '"Divine Elven Order": {"playsets": ["main", "second"]},'
+        '"Korinth": {"playsets": ["built"]},'
+        '"Gone": {"playsets": ["main"]}}}'
     )
-    assert shown_for(built) == {"built", "main"}
+    owners = {"main": "main", "second": "second", "built": "main"}
+    assert first_lists(lists, game, state, old, owners)
+    assert lists.read("main").names == ("Divine Elven Order", "Korinth")
+    assert lists.read("second").names == ("Divine Elven Order",)
+    assert lists.read(LOOSE).names == ("United Nations of Earth",)
+    assert not old.exists() and old.with_name("empires.json.old").exists()
+    assert not first_lists(lists, game, state, old, owners)  # once
+    assert shelve_outside_changes(lists, game, state) == ()  # the file is known
 
 
 # Which mods an empire needs
@@ -248,29 +335,7 @@ def test_a_build_counts_as_every_mod_inside_it(tmp_path: Path) -> None:
     assert playset_mods(built, tmp_path) == {"local:cold_steel_build_main", ALPHA, BETA}
 
 
-def test_unbound_empires_are_suggested_for_each_playset_with_their_mods(
-    tmp_path: Path,
-) -> None:
-    from cold_steel.core.empires import Need
-
-    book = EmpireBook.open(tmp_path / "empires.json")
-    continental = (Need(("common/planet_classes", "pc_continental"), (ALPHA, BETA)),)
-    nowhere = (Need(("common/planet_classes", "pc_nowhere"), ()),)
-    empires = [
-        ("Humans", continental),
-        ("Vanilla", ()),
-        ("Odd", nowhere),
-        ("Chosen", continental),
-        ("Moved", continental),
-    ]
-    book.bind(["Chosen"], "a")
-    book.unbind(["Chosen"], "a")  # unbound by choice
-    book.bind(["Moved"], "c")
-    playsets = {"a": frozenset({ALPHA}), "b": frozenset({BETA}), "c": frozenset()}
-    assert suggest_empires(empires, book, playsets) == {"Humans": ("a", "b")}
-
-
-# Binding by Play
+# What changed in game
 
 
 def test_empires_new_or_changed_since_play(tmp_path: Path) -> None:
@@ -283,80 +348,3 @@ def test_empires_new_or_changed_since_play(tmp_path: Path) -> None:
         "United Nations of Earth",
         "Made in game",
     ]
-
-
-# Hiding
-
-
-def test_hidden_empires_are_kept_byte_for_byte_and_put_back(tmp_path: Path) -> None:
-    path = write_empires(tmp_path, ELVES, HUMANS)
-    record, backups = tmp_path / "data/hidden_empires.txt", tmp_path / "backups"
-
-    assert hide_empires({"Divine Elven Order"}, path, record, backups) == ("Divine Elven Order",)
-    assert path.read_bytes() == HUMANS
-    assert read_hidden(record).texts == (("Divine Elven Order", ELVES),)
-    assert read_hidden(record).path == path
-    (backup,) = backups_of(path, backups)
-    assert backup.read_bytes() == ELVES + HUMANS
-
-    # The game changed one empire and made another: both stay as it left them.
-    changed, made = block("United Nations of Earth", "pc_arid"), block("New")
-    path.write_bytes(changed + made)
-    result = restore_empires(record, backups)
-    assert result.back == ("Divine Elven Order",) and result.stuck == ()
-    assert path.read_bytes() == changed + made + ELVES
-    assert not record.exists()
-
-
-def test_a_hidden_empire_never_overwrites_one_of_the_same_name(tmp_path: Path) -> None:
-    path = write_empires(tmp_path, ELVES, HUMANS)
-    record, backups = tmp_path / "hidden_empires.txt", tmp_path / "backups"
-    hide_empires({"Divine Elven Order", "United Nations of Earth"}, path, record, backups)
-    remade = block("Divine Elven Order", "pc_arctic")
-    path.write_bytes(remade + HUMANS)  # remade with the same name; HUMANS put back by hand
-
-    result = restore_empires(record, backups)
-    assert result.back == ("United Nations of Earth",)  # the same bytes: already back
-    assert result.stuck == ("Divine Elven Order",)
-    assert path.read_bytes() == remade + HUMANS
-    assert hidden_names(record) == ("Divine Elven Order",)
-    # Hiding again leaves alone the one still kept.
-    assert hide_empires({"Divine Elven Order"}, path, record, backups) == ()
-    assert path.read_bytes() == remade + HUMANS
-
-
-def test_empires_come_back_into_a_file_the_game_deleted(tmp_path: Path) -> None:
-    path = write_empires(tmp_path, ELVES, HUMANS)
-    record, backups = tmp_path / "hidden_empires.txt", tmp_path / "backups"
-    hide_empires({"Divine Elven Order"}, path, record, backups)
-    path.unlink()  # its last empire was deleted in the game
-    assert restore_empires(record, backups).back == ("Divine Elven Order",)
-    assert path.read_bytes() == ELVES
-
-
-def test_a_failed_write_hides_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import cold_steel.core.empires as empires
-
-    path = write_empires(tmp_path, ELVES, HUMANS)
-    record, backups = tmp_path / "hidden_empires.txt", tmp_path / "backups"
-
-    def fail(*args: object) -> None:
-        raise OSError("disk full")
-
-    monkeypatch.setattr(empires, "write_empire_file", fail)
-    with pytest.raises(OSError):
-        hide_empires({"Divine Elven Order"}, path, record, backups)
-    assert path.read_bytes() == ELVES + HUMANS
-    assert not record.exists()
-
-
-def test_deleting_an_empire_backs_up_first(tmp_path: Path) -> None:
-    path = write_empires(tmp_path, ELVES, HUMANS)
-    mode = path.stat().st_mode
-    assert remove_empires({"Divine Elven Order", "Gone"}, path, tmp_path / "b") == (
-        "Divine Elven Order",
-    )
-    assert path.read_bytes() == HUMANS
-    assert path.stat().st_mode == mode
-    assert len(backups_of(path, tmp_path / "b")) == 1
-    assert not any(p.name.endswith(".tmp") for p in os.scandir(tmp_path))

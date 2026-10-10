@@ -11,8 +11,9 @@ A playset with no saves leaves the file alone. Continue also starts the game
 with `--continuelastsave`, which opens it at once, skipping the main menu.
 
 With local autosaves, both first hide saves bound to other playsets from the
-game's Load menu (core/hide.py), and empires bound only to other playsets from
-its empire list (core/empires.py). They're put back when the game closes.
+game's Load menu (core/hide.py), and make the playset's empire list the game's
+empire file (core/empires.py). When the game closes, the saves are put back and
+the empire file is copied back into the list.
 """
 
 import contextlib
@@ -20,7 +21,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cold_steel.core.empires import hide_empires, restore_empires
+from cold_steel.core.empires import EmpireLists, put_in_game, take_back
 from cold_steel.core.hide import hidden_dir, hide, restore
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
@@ -44,10 +45,11 @@ class HidePlan:
 
 
 @dataclass(frozen=True)
-class HideEmpiresPlan:
-    names: tuple[str, ...]  # the empires to hide, by name
+class EmpiresPlan:
+    lists: EmpireLists
+    owner: str  # whose list: the playset's, or for a built playset its source's
     file: Path  # the game's empire file
-    record: Path  # hidden_empires.txt, where they're kept meanwhile
+    state: Path  # empires_in_game.json: whose list the game's file holds
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ class PlayPlan:
     continue_from: ContinueGame | None = None
     skip_menu: bool = False  # open it at once, skipping the main menu: Continue
     hide: HidePlan | None = None  # saves of other playsets, kept out of the Load menu
-    hide_empires: HideEmpiresPlan | None = None  # empires of other playsets, kept out too
+    empires: EmpiresPlan | None = None  # the playset's empire list, to put in the game
 
 
 def plan_play(playset: Playset, library: Library) -> PlayPlan:
@@ -111,13 +113,13 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
             )
         except OSError as error:
             raise PlayError(f"Couldn't hide other playsets' saves: {error}") from error
-    if plan.hide_empires is not None:
-        empires = plan.hide_empires
+    if plan.empires is not None:
+        empires = plan.empires
         try:
-            hide_empires(empires.names, empires.file, empires.record, backup_dir)
+            put_in_game(empires.lists, empires.owner, empires.file, empires.state, backup_dir)
         except OSError as error:
-            _put_back(plan, backup_dir)
-            raise PlayError(f"Couldn't hide other playsets' empires: {error}") from error
+            _put_back(plan)
+            raise PlayError(f"Couldn't give the game this playset's empires: {error}") from error
     extra = (CONTINUE_ARG,) if plan.continue_from and plan.skip_menu else ()
     try:
         # Its own session, so closing Cold Steel doesn't close the game.
@@ -130,17 +132,18 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
             start_new_session=True,
         )
     except OSError as error:
-        _put_back(plan, backup_dir)
+        _put_back(plan)
         raise PlayError(f"Couldn't start {game.exe}: {error}") from error
 
 
-def _put_back(plan: PlayPlan, backup_dir: Path) -> None:
-    """The game didn't start: put back what was hidden for it."""
+def _put_back(plan: PlayPlan) -> None:
+    """The game didn't start: put back the saves hidden for it, and mark the
+    empire file as no longer in the game."""
     if plan.hide is not None:
         restore(plan.hide.record)
-    if plan.hide_empires is not None:
-        with contextlib.suppress(OSError):  # left in the record, put back at the next start
-            restore_empires(plan.hide_empires.record, backup_dir)
+    if plan.empires is not None:
+        with contextlib.suppress(OSError):  # tried again at the next start
+            take_back(plan.empires.lists, plan.empires.state, lambda _: True)
 
 
 def write_plan(plan: PlayPlan, game: Game, backup_dir: Path) -> None:

@@ -1,24 +1,27 @@
-"""Empires: which playsets each belongs to, which mods each needs, and hiding
-other playsets' empires from the game while it runs.
+"""Empires: each playset's own list, which mods each empire needs, and
+handing a list to the game while it runs.
 
-    book = EmpireBook.open(path)
-    book.bind(["Divine Elven Order"], playset.id)
-    catalog = build_catalog(index)
-    check = check_empire(empire_needs(info, catalog), playset_mods(playset, build_dir))
-    hide_empires(empires_to_hide(book, file.names, shown_for(playset), ids), …)
+    lists = EmpireLists(empires_dir(), backup_dir)
+    put_in_game(lists, list_owner(playset), game_file, state_path, backup_dir)
+    ... the game runs ...
+    take_back(lists, state_path, backup_dir, exists)
 
-An empire is one block in the game's empire file (paradox/empires.py), named
-by its key. It can belong to several playsets (decision 96), and one bound to
-none shows in every playset. A built playset also shows the empires of the
-playset it was built from (decision 98).
+Each playset has its own list of empires (decision 107), and a built playset
+uses the list of the playset it was built from (decision 98). A list is kept
+in the game's own format, each empire's block byte for byte as the game wrote
+it. Play writes the playset's list as the game's empire file, and when the
+game closes, the file is copied back into the list: whatever was made,
+changed or deleted in game is kept. Empires found in the game's file that are
+in no list, such as those made in a game started another way, go to the
+loose list, to be added to a playset by hand.
 """
 
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 import msgspec
+import xxhash
 
 from cold_steel.core.build import built_from, built_mods
 from cold_steel.core.definitions import digest
@@ -27,151 +30,120 @@ from cold_steel.core.index import GAME, Index, LayerIndex
 from cold_steel.core.mods import base_key
 from cold_steel.core.patch import PATCH_PREFIX
 from cold_steel.core.playsets import as_played
+from cold_steel.paradox.backup import backup_file
 from cold_steel.paradox.empires import (
+    Empire,
     EmpireFile,
     EmpireInfo,
+    EmpireReader,
     Use,
     join_empires,
-    read_empire_file,
-    split_empires,
+    parse_empires,
     write_empire_file,
 )
 from cold_steel.paradox.script import scan
-from cold_steel.store import paths
 from cold_steel.store.empires import (
-    EmpireBinding,
-    EmpireBindingsFile,
-    load_empire_bindings,
-    save_empire_bindings,
+    LOOSE,
+    EmpireState,
+    list_file,
+    load_state,
+    save_state,
 )
-from cold_steel.store.files import write_atomic
+from cold_steel.store.files import load_json, write_atomic
 from cold_steel.store.playsets import Playset
 
-
-class EmpireBook:
-    """Which playsets each empire belongs to, by name. Every change is saved at once."""
-
-    def __init__(self, data: EmpireBindingsFile, path: Path) -> None:
-        self._data = data
-        self._path = path
-        self.problems: list[str] = []
-
-    @classmethod
-    def open(cls, path: Path) -> EmpireBook:
-        """A file that exists but can't be read is renamed, not overwritten."""
-        data = load_empire_bindings(path)
-        problems: list[str] = []
-        if data is None and path.exists():
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            kept = path.with_name(f"{path.stem}.unreadable-{stamp}{path.suffix}")
-            path.replace(kept)
-            problems.append(f"Your empires file couldn't be read. It was kept as {kept.name}.")
-        book = cls(data or EmpireBindingsFile(), path)
-        book.problems = problems
-        return book
-
-    def get(self, name: str) -> EmpireBinding | None:
-        return self._data.empires.get(name)
-
-    def playsets_of(self, name: str) -> tuple[str, ...]:
-        binding = self._data.empires.get(name)
-        return binding.playsets if binding else ()
-
-    def count(self, playset_id: str) -> int:
-        """How many empires are bound to a playset."""
-        return sum(playset_id in b.playsets for b in self._data.empires.values())
-
-    def bind(self, names: Iterable[str], playset_id: str) -> None:
-        """Bind empires to a playset, as well as any they're bound to already."""
-        bound = datetime.now().strftime("%Y-%m-%d %H:%M")
-        for name in names:
-            have = self.playsets_of(name)
-            playsets = have if playset_id in have else (*have, playset_id)
-            self._data.empires[name] = EmpireBinding(playsets, bound)
-        self._save()
-
-    def unbind(self, names: Iterable[str], playset_id: str) -> None:
-        """Unbind empires from one playset, by choice. One left with none is
-        never suggested for a playset again."""
-        for name in names:
-            if binding := self._data.empires.get(name):
-                playsets = tuple(p for p in binding.playsets if p != playset_id)
-                self._data.empires[name] = msgspec.structs.replace(binding, playsets=playsets)
-        self._save()
-
-    def forget(self, names: Iterable[str]) -> None:
-        """The empires were deleted: forget their bindings."""
-        for name in names:
-            self._data.empires.pop(name, None)
-        self._save()
-
-    def forget_playset(self, playset_id: str) -> int:
-        """The playset is gone: its empires lose that binding. One bound to
-        nothing else becomes unbound, and may be suggested for another playset.
-        How many empires it had."""
-        gone = 0
-        for name, binding in list(self._data.empires.items()):
-            if playset_id not in binding.playsets:
-                continue
-            gone += 1
-            playsets = tuple(p for p in binding.playsets if p != playset_id)
-            if playsets:
-                self._data.empires[name] = msgspec.structs.replace(binding, playsets=playsets)
-            else:
-                del self._data.empires[name]
-        if gone:
-            self._save()
-        return gone
-
-    def copy_playset(self, source_id: str, copy_id: str) -> None:
-        """A copy of a playset gets the same empires."""
-        for name, binding in self._data.empires.items():
-            if source_id in binding.playsets and copy_id not in binding.playsets:
-                self._data.empires[name] = msgspec.structs.replace(
-                    binding, playsets=(*binding.playsets, copy_id)
-                )
-        self._save()
-
-    def _save(self) -> None:
-        save_empire_bindings(self._data, self._path)
+# The empire file's name when the game hasn't written one yet.
+DEFAULT_GAME_FILE = "user_empire_designs_v3.4.txt"
 
 
-# Which empires show where
-
-
-def shown_for(playset: Playset) -> frozenset[str]:
-    """The playsets whose empires show in this one: itself, and for a built
-    playset the playset it was built from (decision 98)."""
-    sources = {s for e in playset.entries if (s := built_from(e.key))}
-    return frozenset({playset.id, *sources})
+def list_owner(playset: Playset) -> str:
+    """Whose list a playset uses: its own, or for a built playset the list of
+    the playset it was built from (decision 98)."""
+    return next((s for e in playset.entries if (s := built_from(e.key))), playset.id)
 
 
 def plays_a_build(playset: Playset) -> bool:
-    return any(built_from(e.key) for e in playset.entries)
+    return list_owner(playset) != playset.id
 
 
-def bound_empires(book: EmpireBook, names: Iterable[str], shown: Collection[str]) -> list[str]:
-    """The empires bound to any of the `shown` playsets, in file order."""
-    return [n for n in names if any(p in shown for p in book.playsets_of(n))]
+@dataclass(frozen=True)
+class Added:
+    added: tuple[str, ...] = ()
+    replaced: tuple[str, ...] = ()  # one of the same name was there, and is replaced
+    skipped: tuple[str, ...] = ()  # one of the same name was there, and stays
 
 
-def unbound_empires(
-    book: EmpireBook, names: Iterable[str], playset_ids: Collection[str]
-) -> list[str]:
-    """The empires bound to no playset that exists. They show in every playset."""
-    return [n for n in names if not any(p in playset_ids for p in book.playsets_of(n))]
+class EmpireLists:
+    """Every playset's empire list, and the loose one, by owner: a playset id,
+    or LOOSE. A list is backed up before each write."""
 
+    def __init__(self, root: Path, backup_dir: Path) -> None:
+        self.root = root
+        self.backup_dir = backup_dir / "empires"
+        self._reader = EmpireReader()
 
-def empires_to_hide(
-    book: EmpireBook, names: Iterable[str], shown: Collection[str], playset_ids: Collection[str]
-) -> list[str]:
-    """The empires to keep out of the game: bound only to other playsets that exist."""
-    found: list[str] = []
-    for name in names:
-        existing = [p for p in book.playsets_of(name) if p in playset_ids]
-        if existing and not any(p in shown for p in existing):
-            found.append(name)
-    return found
+    def path(self, owner: str) -> Path:
+        return list_file(owner, self.root)
+
+    def read(self, owner: str) -> EmpireFile:
+        """A list, read again only once it changed. Empty when there's none yet.
+        Raises OSError if it can't be read."""
+        path = self.path(owner)
+        if not path.exists():
+            return EmpireFile(path, b"", ())
+        return self._reader.read(path)
+
+    def owners(self) -> list[str]:
+        """Every playset that has a list file, by id."""
+        try:
+            return sorted(p.stem for p in self.root.glob("*.txt") if p.stem != LOOSE)
+        except OSError:
+            return []
+
+    def write(self, owner: str, data: bytes) -> None:
+        """Replace a list with these bytes, after a backup. Raises OSError."""
+        path = self.path(owner)
+        backup_file(path, self.backup_dir)
+        write_atomic(path, data)
+
+    def add(self, owner: str, empires: Sequence[Empire], *, replace: bool) -> Added:
+        """Copy empires into a list. One whose name is in it already replaces
+        that one, in its place, if `replace`; otherwise it's skipped."""
+        current = self.read(owner)
+        incoming = {e.name: e for e in empires}
+        have = set(current.names)
+        replaced = [n for n in current.names if n in incoming] if replace else []
+        texts = [incoming[e.name].text if e.name in replaced else e.text for e in current.empires]
+        added = [e for e in incoming.values() if e.name not in have]
+        if added or replaced:
+            self.write(owner, join_empires(current.head, [*texts, *(e.text for e in added)]))
+        skipped = () if replace else tuple(n for n in incoming if n in have)
+        return Added(tuple(e.name for e in added), tuple(replaced), skipped)
+
+    def remove(self, owner: str, names: Collection[str]) -> tuple[str, ...]:
+        """Take empires out of a list. Returns those taken out."""
+        current = self.read(owner)
+        going = [e.name for e in current.empires if e.name in names]
+        if going:
+            staying = [e.text for e in current.empires if e.name not in names]
+            self.write(owner, join_empires(current.head, staying))
+        return tuple(going)
+
+    def copy_list(self, source: str, target: str) -> None:
+        """A copy of a playset gets a copy of its list."""
+        path = self.path(source)
+        if path.exists():
+            self.write(target, path.read_bytes())
+
+    def fingerprints(self) -> set[int]:
+        """Every empire in every list, as a hash of its block that ignores spacing."""
+        found: set[int] = set()
+        for owner in (*self.owners(), LOOSE):
+            try:
+                found.update(digest(e.text) for e in self.read(owner).empires)
+            except OSError:
+                continue
+        return found
 
 
 # Which mods an empire needs
@@ -301,37 +273,98 @@ def check_empire(needs: Iterable[Need], mods: Collection[str]) -> EmpireCheck:
     return EmpireCheck(missing, bool(needs))
 
 
-def suggest_empires(
-    empires: Iterable[tuple[str, tuple[Need, ...]]],
-    book: EmpireBook,
-    playsets: Mapping[str, frozenset[str]],
-) -> dict[str, tuple[str, ...]]:
-    """Empire name -> the ids of the playsets that have every mod it needs.
-
-    `playsets` is each playset's mods (playset_mods), by id: built playsets
-    are left out by the caller. Only for empires never bound, or bound to
-    playsets that are gone. An empire that needs no mod works everywhere, and
-    one that needs a mod nobody has works nowhere: neither is suggested."""
-    found: dict[str, tuple[str, ...]] = {}
-    for name, needs in empires:
-        binding = book.get(name)
-        if binding is not None and (
-            not binding.playsets or any(p in playsets for p in binding.playsets)
-        ):
-            continue  # unbound by choice, or bound
-        if not needs or any(not n.mods for n in needs):
-            continue
-        fits = tuple(pid for pid, mods in playsets.items() if check_empire(needs, mods).ok)
-        if fits:
-            found[name] = fits
-    return found
-
-
-# Binding by Play
-
-
 def _text(raw: bytes) -> str:
     return raw.strip(b'"').decode("utf-8", "replace")
+
+
+# The game's empire file, and which list it holds
+
+
+def game_file_for(found: Path | None, data_dir: Path) -> Path:
+    """The game's empire file: the one it uses (empire_file), or the name it
+    would get when there's none yet."""
+    return found or data_dir / DEFAULT_GAME_FILE
+
+
+def _read(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return b""
+
+
+def _hash(data: bytes) -> int:
+    return xxhash.xxh3_64_intdigest(data)
+
+
+def shelve_outside_changes(
+    lists: EmpireLists, game_file: Path, state_path: Path
+) -> tuple[str, ...]:
+    """If the game's empire file changed since Cold Steel last wrote or read it,
+    as when the game was started from the launcher, copy each empire in it that
+    no list has to the loose list. Nothing is lost, and no list is changed
+    behind your back. Returns the names copied. Raises OSError."""
+    state = load_state(state_path)
+    if state.running:
+        return ()  # the file holds a list now: take_back first
+    data = _read(game_file)
+    if state.file == str(game_file) and state.digest == _hash(data):
+        return ()
+    known = lists.fingerprints()
+    found = [e for e in parse_empires(game_file, data).empires if digest(e.text) not in known]
+    if found:
+        lists.add(LOOSE, found, replace=True)
+    save_state(msgspec.structs.replace(state, file=str(game_file), digest=_hash(data)), state_path)
+    return tuple(e.name for e in found)
+
+
+def put_in_game(
+    lists: EmpireLists, owner: str, game_file: Path, state_path: Path, backup_dir: Path
+) -> None:
+    """Make a playset's list the game's empire file, after a backup. Changes
+    made outside Cold Steel are kept first (shelve_outside_changes). An empty
+    list makes an empty file, so the game shows only its own empires.
+    Raises OSError; the game's file is then as it was."""
+    shelve_outside_changes(lists, game_file, state_path)
+    data = _read(lists.path(owner))
+    write_empire_file(game_file, data, backup_dir)
+    # Written after the file, so a crash in between can't copy another list's
+    # empires into this one: the next start sees an outside change instead.
+    save_state(
+        EmpireState(owner=owner, file=str(game_file), digest=_hash(data), running=True), state_path
+    )
+
+
+@dataclass(frozen=True)
+class TakenBack:
+    owner: str  # whose list it was
+    new: tuple[str, ...] = ()  # empires made or changed in game
+    loose: bool = False  # the playset was deleted meanwhile: they went to the loose list
+
+
+def take_back(
+    lists: EmpireLists, state_path: Path, exists: Callable[[str], bool]
+) -> TakenBack | None:
+    """After the game closed: copy the game's empire file back into the list
+    Play put in, byte for byte, so what was made, changed or deleted in game is
+    kept. If that playset was deleted meanwhile, its empires go to the loose
+    list. None when Play put nothing in. Raises OSError; the state then stays,
+    to try again."""
+    state = load_state(state_path)
+    if not state.running:
+        return None
+    game_file = Path(state.file)
+    data = _read(game_file)
+    now = parse_empires(game_file, data)
+    owner = state.owner
+    before = fingerprints(lists.read(owner)) if exists(owner) else {}
+    if exists(owner):
+        if data != _read(lists.path(owner)):
+            lists.write(owner, data)
+    elif now.empires:
+        lists.add(LOOSE, now.empires, replace=True)
+    save_state(EmpireState(owner=owner, file=str(game_file), digest=_hash(data)), state_path)
+    return TakenBack(owner, tuple(changed_since(before, now)), not exists(owner))
 
 
 def fingerprints(file: EmpireFile | None) -> dict[str, int]:
@@ -344,127 +377,48 @@ def changed_since(before: Mapping[str, int], now: EmpireFile | None) -> list[str
     return [n for n, d in fingerprints(now).items() if before.get(n) != d]
 
 
-# Hiding other playsets' empires while the game runs
-
-_PATH_LINE = b"# Cold Steel: empires hidden while the game runs. They go back into:\n# "
-
-
-def hidden_empires_file() -> Path:
-    return paths.data_dir() / "hidden_empires.txt"
+def in_game(state_path: Path) -> str:
+    """The id of the playset whose list the game holds while it runs, or ""."""
+    state = load_state(state_path)
+    return state.owner if state.running else ""
 
 
-@dataclass(frozen=True)
-class HiddenEmpires:
-    path: Path | None  # the empire file they came from
-    texts: tuple[tuple[str, bytes], ...]  # each hidden block, by name, byte for byte
+# The first lists
 
 
-def read_hidden(record: Path) -> HiddenEmpires:
-    """What `hidden_empires.txt` holds. Nothing if it's missing."""
-    try:
-        data = record.read_bytes()
-    except OSError:
-        return HiddenEmpires(None, ())
-    path: Path | None = None
-    if data.startswith(_PATH_LINE):
-        line, _, data = data[len(_PATH_LINE) :].partition(b"\n")
-        path = Path(line.decode("utf-8", "surrogateescape"))
-    _, blocks = split_empires(data)
-    return HiddenEmpires(path, tuple(blocks))
+class _OldBinding(msgspec.Struct):
+    playsets: tuple[str, ...] = ()
 
 
-def hidden_names(record: Path) -> tuple[str, ...]:
-    return tuple(name for name, _ in read_hidden(record).texts)
+class _OldBindings(msgspec.Struct):
+    empires: dict[str, _OldBinding] = msgspec.field(default_factory=dict)
 
 
-def _write_hidden(record: Path, path: Path, texts: Iterable[bytes]) -> None:
-    head = _PATH_LINE + str(path).encode("utf-8", "surrogateescape") + b"\n"
-    write_atomic(record, join_empires(head, texts))
-
-
-def hide_empires(
-    names: Collection[str], path: Path, record: Path, backup_dir: Path
-) -> tuple[str, ...]:
-    """Take these empires out of the empire file at `path`, keeping their blocks
-    in `record` first, byte for byte. Returns those taken out. An empire whose
-    name is still in the record, not put back, stays where it is.
-
-    Raises OSError if anything can't be written. The empire file is then as it was.
-    """
-    if not names or not path.is_file():
-        return ()
-    current = read_empire_file(path)
-    held = read_hidden(record)
-    if held.texts and held.path != path:
-        return ()  # still hidden from another empire file: theirs to put back first
-    kept_names = {n for n, _ in held.texts}
-    taking = [e for e in current.empires if e.name in names and e.name not in kept_names]
-    if not taking:
-        return ()
-    taken = {e.name for e in taking}
-    _write_hidden(record, path, [*(t for _, t in held.texts), *(e.text for e in taking)])
-    staying = [e.text for e in current.empires if e.name not in taken]
-    try:
-        write_empire_file(path, join_empires(current.head, staying), backup_dir)
-    except OSError:
-        if held.texts:
-            _write_hidden(record, path, (t for _, t in held.texts))
-        else:
-            record.unlink(missing_ok=True)
-        raise
-    return tuple(e.name for e in taking)
-
-
-@dataclass(frozen=True)
-class RestoredEmpires:
-    back: tuple[str, ...] = ()  # put back into the empire file
-    # Still hidden: an empire of the same name is in the file by then. They
-    # stay in the record, and nothing is overwritten.
-    stuck: tuple[str, ...] = ()
-    record: Path = field(default_factory=Path)
-
-
-def restore_empires(record: Path, backup_dir: Path) -> RestoredEmpires:
-    """Add every hidden empire back to whatever the game left in the empire
-    file. One whose name is there by then stays hidden, unless it's the same
-    block, as when Cold Steel stopped just after putting it back.
-
-    Raises OSError if the empire file can't be written; the record then stays."""
-    held = read_hidden(record)
-    if not held.texts or held.path is None:
-        return RestoredEmpires(record=record)
-    path = held.path
-    try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        data = b""  # every empire was deleted in the game
-    now = {name: digest(text) for name, text in split_empires(data)[1]}
-    back: list[str] = []
-    adding: list[bytes] = []
-    stuck: list[tuple[str, bytes]] = []
-    for name, text in held.texts:
-        if name not in now:
-            adding.append(text)
-            back.append(name)
-        elif now[name] == digest(text):
-            back.append(name)
-        else:
-            stuck.append((name, text))
-    if adding:
-        write_empire_file(path, join_empires(data, adding), backup_dir)
-    if stuck:
-        _write_hidden(record, path, (t for _, t in stuck))
-    else:
-        record.unlink(missing_ok=True)
-    return RestoredEmpires(tuple(back), tuple(n for n, _ in stuck), record)
-
-
-def remove_empires(names: Collection[str], path: Path, backup_dir: Path) -> tuple[str, ...]:
-    """Delete empires from the empire file, after a backup. Returns those deleted.
-    Raises OSError if it can't be written."""
-    current = read_empire_file(path)
-    going = [e for e in current.empires if e.name in names]
-    if going:
-        staying = [e.text for e in current.empires if e.name not in names]
-        write_empire_file(path, join_empires(current.head, staying), backup_dir)
-    return tuple(e.name for e in going)
+def first_lists(
+    lists: EmpireLists,
+    game_file: Path,
+    state_path: Path,
+    old_bindings: Path,
+    owners: Mapping[str, str],
+) -> bool:
+    """The first time: make the lists from the game's empire file. An empire
+    bound to playsets by an earlier build of Phase 9 goes to each of their
+    lists; the rest go to the loose list. `owners` maps each playset id to its
+    list's owner (list_owner). Returns True if it ran. Raises OSError."""
+    if lists.root.exists():
+        return False
+    data = _read(game_file)
+    old = load_json(old_bindings, _OldBindings) or _OldBindings()
+    lists.root.mkdir(parents=True)
+    by_owner: dict[str, list[Empire]] = {}
+    for empire in parse_empires(game_file, data).empires:
+        bound = old.empires.get(empire.name)
+        homes = dict.fromkeys(owners[p] for p in (bound.playsets if bound else ()) if p in owners)
+        for owner in homes or (LOOSE,):
+            by_owner.setdefault(owner, []).append(empire)
+    for owner, empires in by_owner.items():
+        lists.add(owner, empires, replace=True)
+    if old_bindings.exists():
+        old_bindings.replace(old_bindings.with_name(f"{old_bindings.name}.old"))
+    save_state(EmpireState(file=str(game_file), digest=_hash(data)), state_path)
+    return True
