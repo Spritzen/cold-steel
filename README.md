@@ -211,7 +211,8 @@ Like saves, **this needs the game's cloud autosaves turned off.**
 - The **History** tab lists each version of a playset's list, the last 50:
   what each change did, such as "Imported 3 from Cold Steel Mix" or "Before
   Play". **Restore** puts one back. The list as it was is kept at the top, so
-  a restore can be undone the same way.
+  a restore can be undone the same way. **Clear history…** moves every
+  version to the trash, after asking.
 - **Check all lists** checks every list against the game and the mods each
   playset has, and says why an empire won't work: a mod gone or updated, or a
   mod the playset lacks. It also runs on its own after the game or a mod

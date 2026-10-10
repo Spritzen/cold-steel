@@ -53,6 +53,8 @@ def changes_text(changes: Changes | None) -> str:
 class HistoryPanel(QWidget):
     # Put this version (a Version) back as the list.
     restore_requested = Signal(object)
+    # Clear every version of the list.
+    clear_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,9 +77,15 @@ class HistoryPanel(QWidget):
             "as a version first, at the top, so restoring can be undone here too"
         )
         self.restore_button.clicked.connect(self._restore)
+        self.clear_button = QPushButton("Clear history…")
+        self.clear_button.setToolTip(
+            "Move every version of this list to the trash. The list itself stays as it is"
+        )
+        self.clear_button.clicked.connect(self.clear_requested)
         buttons = QHBoxLayout()
         buttons.addWidget(self.restore_button)
         buttons.addStretch()
+        buttons.addWidget(self.clear_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.summary)
@@ -119,6 +127,7 @@ class HistoryPanel(QWidget):
             item.setToolTip(0, str(version.path))
             if row.names:
                 item.setToolTip(2, "\n".join(row.names))
+        self.clear_button.setEnabled(bool(rows))
         self._selection_changed()
 
     def selected(self) -> Version | None:

@@ -2225,6 +2225,28 @@ def test_history_check_all_lists_and_the_empires_line(
     assert newest is not None and newest.text(1) == "Before restoring"
     assert newest.text(3) == "Removed Divine Elven Order"
 
+    # Clear history asks, then moves every version to the trash. The list stays.
+    trashed: list[Path] = []
+
+    def trash(path: Path) -> bool:
+        trashed.append(path)
+        path.unlink()
+        return True
+
+    monkeypatch.setattr(window, "trash", trash)
+    monkeypatch.setattr(window, "confirm", lambda *args: False)
+    history.clear_button.click()
+    assert trashed == [] and history.tree.topLevelItemCount() == 2
+    asked = say_yes(window, monkeypatch)
+    history.clear_button.click()
+    assert "Clear all 2 version(s) of Second Playset's empire list?" in asked[0]
+    assert len(trashed) == 3  # two versions and their notes
+    assert lists.versions("p-second") == []
+    assert lists.read("p-second").names == (UNE_EMPIRE,)
+    assert history.tree.topLevelItemCount() == 0
+    assert not history.clear_button.isEnabled()
+    assert "Cleared 2 version(s). They're in the trash." in history.summary.text()
+
     dialog.tabs.setCurrentIndex(0)
 
     # Check all lists: every list, and why each marked empire won't work.

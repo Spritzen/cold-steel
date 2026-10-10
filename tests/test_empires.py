@@ -407,6 +407,17 @@ def test_each_change_keeps_a_version_with_a_note(lists: EmpireLists) -> None:
     assert compare(lists.read_version(older), changed) == Changes(changed=("Divine Elven Order",))
 
 
+def test_a_lists_history_files_are_its_versions_and_their_notes(lists: EmpireLists) -> None:
+    assert lists.history_files("a") == []
+    lists.write("a", ELVES)
+    lists.write("a", HUMANS, "Replaced")
+    (version,) = lists.versions("a")
+    assert lists.history_files("a") == [version.path, history_file("a", lists.root)]
+    lists.write(LOOSE, ELVES)
+    lists.write(LOOSE, HUMANS)
+    assert version.path not in lists.history_files(LOOSE)  # each list's own
+
+
 def test_restoring_a_version_keeps_the_list_as_it_was_first(lists: EmpireLists) -> None:
     lists.add("a", empires(ELVES), replace=False, format="3.4")
     lists.add("a", empires(HUMANS), replace=False)

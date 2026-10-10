@@ -184,6 +184,13 @@ class EmpireLists:
             versions.append(Version(path, when, note.note, note.format))
         return versions[::-1]
 
+    def history_files(self, owner: str) -> list[Path]:
+        """Every file of a list's history: its versions, then their notes.
+        Clearing the history moves these to the trash; the list stays."""
+        files = backups_of(self.path(owner), self.backup_dir)
+        notes = history_file(owner, self.root)
+        return [*files, notes] if notes.exists() else files
+
     def read_version(self, version: Version) -> EmpireFile:
         """Raises OSError if it can't be read."""
         return self._reader.read(version.path)

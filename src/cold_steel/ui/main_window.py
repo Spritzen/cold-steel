@@ -2334,6 +2334,7 @@ class MainWindow(QMainWindow):
             dialog.source_chosen.connect(self._empire_source_chosen)
             dialog.history_requested.connect(lambda: self._show_history(self.selected_playset()))
             dialog.history.restore_requested.connect(self.restore_version)
+            dialog.history.clear_requested.connect(self.clear_history)
             dialog.convert_requested.connect(self.convert_empires)
             dialog.check_all_requested.connect(self.check_all_empires)
         self._sync_empires()
@@ -2746,6 +2747,35 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(f"Restored the empires of {self._list_name(owner)}")
         self._lists_changed((owner, done))
+
+    def clear_history(self) -> None:
+        """Move every version of the selected playset's list to the trash,
+        after asking (decision 128). The list itself stays."""
+        playset = self.selected_playset()
+        if playset is None:
+            return
+        owner = list_owner(playset)
+        name = self._list_name(owner)
+        count = len(self.empire_lists.versions(owner))
+        if not count or not self.confirm(
+            "Clear history",
+            f"Clear all {count} version(s) of {name}'s empire list?\n\n"
+            "They go to the trash, so they can be got back from there. The list "
+            "itself stays as it is, and a new version is kept at its next change.",
+        ):
+            return
+        failed = [p for p in self.empire_lists.history_files(owner) if not self.trash(p)]
+        if failed:
+            self.tell(
+                "Clear history",
+                "These couldn't be moved to the trash, and stay:\n"
+                + "\n".join(str(p) for p in failed),
+            )
+        cleared = count - sum(p.suffix == ".txt" for p in failed)
+        done = f"Cleared {cleared} version(s). They're in the trash."
+        self.statusBar().showMessage(f"Cleared the history of {name}'s empires")
+        self._history_done = (owner, done)
+        self._show_history(playset)
 
     def convert_empires(self) -> None:
         """Convert the selected playset's list to the empire file format the
