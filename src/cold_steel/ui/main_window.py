@@ -256,6 +256,9 @@ class MainWindow(QMainWindow):
         self._build_dir = build_dir or builds_dir()
         self._build_task: Task | None = None
         self._build_dialog: BuildDialog | None = None
+        # A finished build, waiting for the scan that finds its mod: the record,
+        # and whether its source playset was still selected (decision 95).
+        self._shown_after_scan: tuple[BuildRecord, bool] | None = None
         self._saves_path = saves_path or bindings_file()
         # Saves, Continue, binding and the rebuild question are on only while the
         # game keeps its autosaves local (decision 91). Read from settings.txt.
@@ -654,6 +657,7 @@ class MainWindow(QMainWindow):
         self._check_old_copies()
         self._read_saves_setting()
         self._scan_saves()
+        self._show_finished_build()
         self.library_shown.emit(library)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
@@ -820,6 +824,10 @@ class MainWindow(QMainWindow):
         self.message.setText(text)
         self.pages.setCurrentIndex(1)
         self.statusBar().showMessage("Scan failed")
+        if self._shown_after_scan is not None:
+            record, _ = self._shown_after_scan
+            self._shown_after_scan = None
+            self.show_build_report(record)
 
     def _show_progress(self, done: int, total: int, message: str) -> None:
         self.progress.setRange(0, total)  # 0..0 shows a busy bar
@@ -2119,9 +2127,30 @@ class MainWindow(QMainWindow):
             save_record(self._build_dir, record)
         if self._rebuild is not None:
             self._apply_rebuild(record, self._rebuild)
+        current = self.selected_playset()
+        self._shown_after_scan = (record, current is not None and current.id == playset.id)
         self.statusBar().showMessage(f"Built {playset.name} into one mod")
         self.build_finished.emit(record)
-        self.rescan()  # finds the built mod
+        self.rescan()  # finds the built mod, then _show_finished_build
+
+    def _show_finished_build(self) -> None:
+        """Once the scan has found the built mod: select the playset that plays it
+        if the source playset is still selected (decision 95), then open the report."""
+        if self._shown_after_scan is None:
+            return
+        record, still_selected = self._shown_after_scan
+        self._shown_after_scan = None
+        book = self.book
+        plays_it = book.get(record.built_playset) if book and record.built_playset else None
+        if plays_it is not None:
+            current = self.selected_playset()
+            if still_selected and current is not None and current.id == record.playset:
+                self._fill_playsets(plays_it.id)
+                self.statusBar().showMessage(f"Built {record.name}. {plays_it.name} plays it")
+            else:
+                self.statusBar().showMessage(
+                    f"Built {record.name}. Select {plays_it.name} to play it"
+                )
         self.show_build_report(record)
 
     def _build_failed(self, error: Exception) -> None:
@@ -2244,7 +2273,6 @@ class MainWindow(QMainWindow):
         if dialog is None:
             dialog = self._build_dialog = BuildDialog(self)
         dialog.set_record(record)
-        self.report_action.setEnabled(True)
         self.show_dialog(dialog)
 
     # Questions for the user. Tests replace these.
