@@ -4,10 +4,12 @@
     make screenshots PLAYSET="Cold Steel Mix"
 
 It shows the playset you last played, or the one PLAYSET names. The Saves
-window shows the playset with the most saves; it's left out while the game's
-cloud autosaves are on. Run it on the host for the desktop's own style; in
-the container it draws off screen with Qt's plain style. Your playsets and
-save bindings are read from copies, so nothing of yours is changed.
+window shows the playset with the most saves, and the Empires window the one
+with the most empires; both are left out while the game's cloud autosaves are
+on. With no empire bound yet, the Empires window takes its suggestions first.
+Run it on the host for the desktop's own style; in the container it draws
+off screen with Qt's plain style. Your playsets, save bindings and empire
+bindings are read from copies, so nothing of yours is changed.
 Pictures go in screenshots/.
 """
 
@@ -20,6 +22,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
+from cold_steel.core.empires import bound_empires, shown_for
 from cold_steel.core.library import Scanner
 from cold_steel.core.saves import bound_saves
 from cold_steel.paradox.save import autosaves_to_cloud
@@ -39,7 +42,7 @@ def main() -> int:
     wanted = parser.parse_args().playset
     OUT.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="cold-steel-shots-"))
-    for name in ("playsets.json", "saves.json"):
+    for name in ("playsets.json", "saves.json", "empires.json"):
         if (mine := paths.data_dir() / name).exists():
             shutil.copy(mine, scratch / name)
 
@@ -52,6 +55,8 @@ def main() -> int:
         backup_dir=scratch / "backups",
         saves_path=scratch / "saves.json",
         hidden_path=scratch / "hidden.json",
+        empires_path=scratch / "empires.json",
+        hidden_empires_path=scratch / "hidden_empires.txt",
         settings=settings,
     )
 
@@ -113,7 +118,7 @@ def main() -> int:
         book, bindings, saves = window.book, window.bindings, window.saves
         if not (window.saves_on and book and bindings and saves):
             print("No saves to show (cloud autosaves on, or none found): skipped the Saves window.")
-            app.quit()
+            take_empires()
             return
         most = max(book.playsets, key=lambda p: len(bound_saves(saves, bindings, p.id)))
         select(most.id)
@@ -129,6 +134,32 @@ def main() -> int:
             for theme in ("light", "dark"):
                 apply_theme(app, theme)
                 save(dialog, f"saves-{theme}")
+            dialog.close()
+        take_empires()
+
+    def take_empires() -> None:
+        book, empires, file = window.book, window.empire_book, window._read_empires()
+        if not (window.saves_on and book and empires and file):
+            print("No empires to show (cloud autosaves on, or none designed): skipped Empires.")
+            app.quit()
+            return
+        count = {p.id: len(bound_empires(empires, file.names, shown_for(p))) for p in book.playsets}
+        if max(count.values(), default=0):
+            select(max(count, key=lambda pid: count[pid]))
+        else:  # none bound yet: the unbound ones show for the playset shown above
+            select_playset()
+        window.empires_checked.connect(lambda _: QTimer.singleShot(500, empires_ready))
+        window.show_empires()
+
+    def empires_ready() -> None:
+        dialog = window._empires_dialog
+        if dialog is not None:
+            if not dialog.bound.topLevelItemCount() and dialog.suggested_button.isEnabled():
+                # None bound yet: take the suggestions, in the copy of your bindings.
+                dialog.suggested_button.click()
+            for theme in ("light", "dark"):
+                apply_theme(app, theme)
+                save(dialog, f"empires-{theme}")
         app.quit()
 
     def library_ready() -> None:

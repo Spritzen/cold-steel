@@ -191,6 +191,8 @@ with. An empire made with a mod's planet class still shows in a playset
 without that mod. Cold Steel ties each empire to the playsets it works in.
 Like saves, **this needs the game's cloud autosaves turned off.**
 
+![The Empires window: a playset's empires, each marked with the mods it needs](screenshots/empires-dark.png)
+
 - **Empires…** lists the empires bound to the playset, then the unbound ones,
   which show in every playset. Each is marked ✓ when the playset has every mod
   it uses, or ⚠ with the mods it lacks.
