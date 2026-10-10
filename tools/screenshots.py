@@ -6,8 +6,8 @@
 It shows the playset you last played, or the one PLAYSET names. The Saves
 window shows the playset with the most saves, and the Empires window the one
 with the most empires in its list; both are left out while the game's cloud
-autosaves are on. Run it on the host for the desktop's own style; in the
-container it draws off screen with Qt's plain style. Your playsets, save
+autosaves are on. In the container, run it offscreen: it draws with Qt's
+plain Fusion style, where the host uses the desktop's own. Your playsets, save
 bindings and empire lists are read from copies, so nothing of yours is changed.
 Pictures go in screenshots/.
 """

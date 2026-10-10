@@ -29,7 +29,7 @@ bench:          ## Run only the timing benchmarks
 docs:           ## Check that every link in the docs resolves
 	$(PY) tools/check_links.py
 
-screenshots:    ## Take the README's screenshots from your install (best run on the host)
+screenshots:    ## Take the README's screenshots from your install, light and dark
 	$(PY) tools/screenshots.py $(if $(PLAYSET),--playset "$(PLAYSET)")
 
 package:        ## Build the Arch package from the last commit, into build/package/
