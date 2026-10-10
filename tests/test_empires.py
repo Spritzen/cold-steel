@@ -3,14 +3,18 @@ and handing a list to the game."""
 
 from pathlib import Path
 
+import msgspec
 import pytest
 
 from cold_steel.core.empires import (
+    KEEP_VERSIONS,
+    Changes,
     EmpireLists,
     FormatError,
     build_catalog,
     changed_since,
     check_empire,
+    compare,
     empire_needs,
     fingerprints,
     first_lists,
@@ -35,9 +39,9 @@ from cold_steel.paradox.empires import (
     read_empire_file,
     split_empires,
 )
-from cold_steel.store.empires import LOOSE, load_state
+from cold_steel.store.empires import LOOSE, Sources, history_file, load_state
 from cold_steel.store.playsets import Playset, PlaysetEntry
-from conftest import SampleInstall, add_empire_definitions, write_empires
+from conftest import SampleInstall, write_empires
 from conftest import empire_block as block
 
 ALPHA = "workshop:2000000001"
@@ -273,29 +277,6 @@ def test_the_first_lists_come_from_earlier_bindings(tmp_path: Path) -> None:
 # Which mods an empire needs
 
 
-@pytest.fixture
-def catalog_install(sample_install: SampleInstall) -> SampleInstall:
-    """The game defines the desert planet class and every other thing the
-    empires use. Alpha adds a continental one; Beta adds it too."""
-    install = sample_install.root / "games/steamapps/common/Stellaris"
-    mods = {
-        sample_install.workshop_dir / "2000000001/common/planet_classes/alpha.txt": (
-            b"pc_continental = { }\n"
-        ),
-        sample_install.workshop_dir / "2000000002/common/planet_classes/beta.txt": (
-            b"pc_continental = { }\n"
-        ),
-        sample_install.workshop_dir / "2000000002/common/species_classes/beta.txt": (
-            b"BETA_CLASS = { }\n"
-        ),
-    }
-    add_empire_definitions(install)
-    for path, data in mods.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    return sample_install
-
-
 def test_an_empire_needs_the_mods_that_define_what_it_uses(
     catalog_install: SampleInstall, tmp_path: Path
 ) -> None:
@@ -399,3 +380,94 @@ def test_empires_new_or_changed_since_play(tmp_path: Path) -> None:
         "United Nations of Earth",
         "Made in game",
     ]
+
+
+# History
+
+
+def test_each_change_keeps_a_version_with_a_note(lists: EmpireLists) -> None:
+    lists.add("a", empires(ELVES), replace=False, format="3.4", note="first")  # nothing before
+    assert lists.versions("a") == []
+    lists.add("a", empires(HUMANS), replace=False, note="Imported United Nations of Earth")
+    lists.remove("a", {"Divine Elven Order"})
+
+    newest, older = lists.versions("a")  # newest first
+    assert newest.note == "Removed Divine Elven Order"
+    assert older.note == "Imported United Nations of Earth"
+    assert newest.format == "3.4"
+    assert lists.read_version(older).names == ("Divine Elven Order",)
+    assert lists.read_version(newest).names == ("Divine Elven Order", "United Nations of Earth")
+    assert compare(lists.read_version(older), lists.read_version(newest)) == Changes(
+        added=("United Nations of Earth",)
+    )
+    assert compare(lists.read_version(newest), lists.read("a")) == Changes(
+        removed=("Divine Elven Order",)
+    )
+    changed = parse_empires(Path("x"), block("Divine Elven Order", "pc_arid"))
+    assert compare(lists.read_version(older), changed) == Changes(changed=("Divine Elven Order",))
+
+
+def test_a_lists_history_files_are_its_versions_and_their_notes(lists: EmpireLists) -> None:
+    assert lists.history_files("a") == []
+    lists.write("a", ELVES)
+    lists.write("a", HUMANS, "Replaced")
+    (version,) = lists.versions("a")
+    assert lists.history_files("a") == [version.path, history_file("a", lists.root)]
+    lists.write(LOOSE, ELVES)
+    lists.write(LOOSE, HUMANS)
+    assert version.path not in lists.history_files(LOOSE)  # each list's own
+
+
+def test_restoring_a_version_keeps_the_list_as_it_was_first(lists: EmpireLists) -> None:
+    lists.add("a", empires(ELVES), replace=False, format="3.4")
+    lists.add("a", empires(HUMANS), replace=False)
+    lists.set_info("a", format="3.5")  # as if converted since
+    (version,) = lists.versions("a")
+
+    lists.restore("a", version)
+    assert lists.path("a").read_bytes() == ELVES  # byte for byte
+    assert lists.info("a").format == "3.4"
+    newest = lists.versions("a")[0]
+    assert (newest.note, newest.format) == ("Before restoring", "3.5")
+    assert lists.read_version(newest).names == ("Divine Elven Order", "United Nations of Earth")
+
+
+def test_a_list_keeps_its_last_50_versions(lists: EmpireLists) -> None:
+    lists.write("a", ELVES)
+    for n in range(55):
+        lists.write("a", ELVES, f"change {n}")
+    versions = lists.versions("a")
+    assert len(versions) == KEEP_VERSIONS == 50
+    assert versions[0].note == "change 54" and versions[-1].note == "change 5"
+    kept = msgspec.json.decode(history_file("a", lists.root).read_bytes())["notes"]
+    assert len(kept) == 50  # notes of pruned versions are dropped
+
+
+def test_the_game_changing_a_list_keeps_a_version_before_play(
+    lists: EmpireLists, tmp_path: Path
+) -> None:
+    game = write_empires(tmp_path, ELVES)
+    state = tmp_path / "state.json"
+    lists.add("a", empires(ELVES), replace=False)
+    put_in_game(lists, "a", game, state, tmp_path / "backups")
+    game.write_bytes(ELVES + HUMANS)
+    take_back(lists, state, lambda _: True, "v4.5.2")
+    assert lists.versions("a")[0].note == "Before Play, game v4.5.2"
+
+    put_in_game(lists, "a", game, state, tmp_path / "backups")  # the game changes nothing
+    take_back(lists, state, lambda _: True, "v4.5.2")
+    assert len(lists.versions("a")) == 1
+
+
+def test_sources_are_kept_beside_the_list_and_follow_it(lists: EmpireLists) -> None:
+    lists.add("a", empires(ELVES, HUMANS), replace=False, format="3.4")
+    lists.set_sources(
+        "a", {"Divine Elven Order": Sources(1), "United Nations of Earth": Sources(2)}
+    )
+    lists.set_info("a", played="v4.5.2")
+    assert set(lists.info("a").sources) == {"Divine Elven Order", "United Nations of Earth"}
+    lists.remove("a", {"Divine Elven Order"})
+    assert set(lists.info("a").sources) == {"United Nations of Earth"}
+    lists.copy_list("a", "b")
+    assert lists.info("b").sources == lists.info("a").sources
+    assert lists.path("a").read_bytes() == HUMANS  # the list stays the game's own format

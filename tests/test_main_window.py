@@ -1933,13 +1933,22 @@ def test_importing_and_exporting_empires_between_playsets(
     assert "planet class pc_continental: Alpha Interface" in une.toolTip(6)
     assert "1 is marked ⚠" in dialog.summary.text()
 
-    # Import from another playset copies. One of the same name asks first.
+    # Import from another playset copies. It asks first when the playset lacks
+    # mods an empire uses, and when one of the same name is there.
     dialog.source_box.setCurrentIndex(dialog.source_box.findData("p-main"))
     assert empire_names(dialog.other) == [ELVES_EMPIRE, UNE_EMPIRE]
-    monkeypatch.setattr(window, "confirm", lambda *args: False)  # skip the same name
+    asked = []
+
+    def lacks_yes_same_no(title: str, text: str) -> bool:
+        asked.append(text)
+        return "lacks mods" in text  # import anyway, but skip the same name
+
+    monkeypatch.setattr(window, "confirm", lacks_yes_same_no)
     menu_action(
         dialog.menu_for(dialog.other, (ELVES_EMPIRE, UNE_EMPIRE)), "Import to this playset"
     ).trigger()
+    assert "Second Playset lacks mods these empires use" in asked[0]
+    assert "Import anyway?" in asked[0]
     assert lists.read("p-second").names == (UNE_EMPIRE, ELVES_EMPIRE)
     assert "1 empire(s) copied to Second Playset, 1 skipped" in window.statusBar().currentMessage()
 
@@ -2159,3 +2168,160 @@ def test_species_names_picked_from_the_games_names_are_tidied() -> None:
     assert species_name("SPEC_Korinth") == "Korinth"
     assert species_name("SPEC_Blorg_Commonality") == "Blorg Commonality"
     assert species_name("Elf") == "Elf"  # typed by you: kept as typed
+
+
+def test_history_check_all_lists_and_the_empires_line(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cold_steel.store.empires import LOOSE
+
+    window = with_empires
+    lists = window.empire_lists
+    window.playset_list.setCurrentRow(2)  # Second Playset, which lacks Alpha
+    dialog = open_empires(qtbot, window)
+    assert not window.empires_label.isVisibleTo(window)
+
+    # Each import enters the list with its sources, and keeps a version of it.
+    asked = say_yes(window, monkeypatch)
+    for name in (UNE_EMPIRE, ELVES_EMPIRE):
+        with qtbot.waitSignal(window.empires_checked, timeout=20_000):
+            menu_action(dialog.menu_for(dialog.other, (name,)), "Import to this playset").trigger()
+    assert "Second Playset lacks mods these empires use" in asked[0]
+    une = lists.info("p-second").sources[UNE_EMPIRE]
+    assert not une.later and [(m.name, m.version) for m in une.uses[0].mods] == [
+        ("Alpha Interface", "1.2")
+    ]
+    assert window.empires_label.isVisibleTo(window)
+    assert (
+        "1 empire(s) of this playset won't work in it as they are: United Nations of Earth"
+        in window.empires_label.text()
+    )
+
+    # History is a tab of the Empires window: the version before the second
+    # import, and what that import did.
+    dialog.show_history()
+    history = dialog.history
+    assert history.isVisible() and window._empires_dialog is dialog
+    item = history.tree.topLevelItem(0)
+    assert history.tree.topLevelItemCount() == 1 and item is not None
+    assert item.text(1) == "Imported Divine Elven Order from Not in any playset"
+    assert item.text(3) == "Added Divine Elven Order"
+    assert item.toolTip(2) == UNE_EMPIRE  # its empires
+    assert lists.versions(LOOSE)[0].note == "Moved Divine Elven Order to Second Playset"
+
+    # Restore puts it back without asking: the list as it was is kept first,
+    # at the top, so it can be undone right there.
+    item.setSelected(True)
+    asked.clear()
+    with qtbot.waitSignal(window.empires_checked, timeout=20_000):
+        history.restore_button.click()
+    assert asked == []
+    assert lists.read("p-second").names == (UNE_EMPIRE,)
+    assert "Restored the list as it was on" in history.summary.text()  # kept after the check
+    newest = history.tree.topLevelItem(0)
+    assert newest is not None and newest.text(1) == "Before restoring"
+    assert newest.text(3) == "Removed Divine Elven Order"
+
+    # Clear history asks, then moves every version to the trash. The list stays.
+    trashed: list[Path] = []
+
+    def trash(path: Path) -> bool:
+        trashed.append(path)
+        path.unlink()
+        return True
+
+    monkeypatch.setattr(window, "trash", trash)
+    monkeypatch.setattr(window, "confirm", lambda *args: False)
+    history.clear_button.click()
+    assert trashed == [] and history.tree.topLevelItemCount() == 2
+    asked = say_yes(window, monkeypatch)
+    history.clear_button.click()
+    assert "Clear all 2 version(s) of Second Playset's empire list?" in asked[0]
+    assert len(trashed) == 3  # two versions and their notes
+    assert lists.versions("p-second") == []
+    assert lists.read("p-second").names == (UNE_EMPIRE,)
+    assert history.tree.topLevelItemCount() == 0
+    assert not history.clear_button.isEnabled()
+    assert "Cleared 2 version(s). They're in the trash." in history.summary.text()
+
+    dialog.tabs.setCurrentIndex(0)
+
+    # Check all lists: every list, and why each marked empire won't work.
+    with qtbot.waitSignal(window.empires_checked, timeout=20_000):
+        dialog.check_button.click()
+    check = window._check_dialog
+    assert check is not None and check.isVisible()
+    rows = {
+        top.text(0): top
+        for i in range(check.tree.topLevelItemCount())
+        if (top := check.tree.topLevelItem(i)) is not None
+    }
+    second = rows["Second Playset"]
+    assert second.text(1) == "⚠ 1 of 1 empire(s) marked"
+    marked = second.child(0)
+    assert marked is not None and marked.text(0) == f"⚠ {UNE_EMPIRE}"
+    assert "only in Alpha Interface, which Second Playset lacks" in marked.text(1)
+
+    # After a mod update drops what an empire uses, the check runs on its own,
+    # and names the mod and version it came from.
+    alpha = sample_install.workshop_dir / "2000000001/common/planet_classes/alpha.txt"
+    alpha.write_bytes(b"pc_other = { }\n")
+    with qtbot.waitSignal(window.empires_checked, timeout=20_000):
+        window.rescan()
+    assert "After a mod changed, 1 empire(s) in 1 list(s) won't work as they are" in (
+        window.statusBar().currentMessage()
+    )
+    une_row = dialog.listed.topLevelItem(0)
+    assert une_row is not None
+    assert (
+        "Made with Alpha Interface 1.2. Its planet class pc_continental is gone from it now."
+        in (une_row.toolTip(6))
+    )
+
+
+def test_converting_a_list_to_a_new_empire_file_format(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cold_steel.core.empire_conversions import Conversion, Rename
+
+    window = with_empires
+    lists = window.empire_lists
+    window._sync_empires()
+    lists.add("p-main", lists.read("loose").empires, replace=False, format="3.4")
+    (sample_install.data_dir / "user_empire_designs_v3.5.txt").write_bytes(b"")  # a game update
+    window.playset_list.setCurrentRow(1)  # Main Playset
+    dialog = open_empires(qtbot, window)
+    assert dialog.convert_button.isVisibleTo(dialog)
+    assert "older empire file format" in window.empires_label.text()
+
+    told: list[str] = []
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+    dialog.convert_button.click()
+    assert "knows no conversion from empire file 3.4 to 3.5" in told[0]
+    assert lists.info("p-main").format == "3.4"  # stays, still refused by Play
+
+    rename = Rename("planet_class", "pc_continental", "pc_wet")
+    window._conversions = (Conversion("3.4", "3.5", (rename,)),)
+    shown: list[tuple[str, str]] = []
+
+    def ask(title: str, text: str, changes: str) -> bool:
+        shown.append((text, changes))
+        return True
+
+    monkeypatch.setattr(window, "ask_conversion", ask)
+    dialog.convert_button.click()
+    text, changes = shown[0]
+    assert "from empire file 3.4 to 3.5" in text and "1 of them change" in text
+    assert 'planet_class="pc_continental"  →  planet_class="pc_wet"' in changes
+    assert lists.info("p-main").format == "3.5"
+    assert lists.versions("p-main")[0].note == "Before converting to empire file 3.5"
+    assert not dialog.convert_button.isVisibleTo(dialog)
+    assert not window.empires_label.isVisibleTo(window) or (
+        "older empire file format" not in window.empires_label.text()
+    )

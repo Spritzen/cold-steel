@@ -18,6 +18,7 @@ loose list, to be added to a playset by hand.
 
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import msgspec
@@ -30,7 +31,7 @@ from cold_steel.core.index import GAME, Index, LayerIndex
 from cold_steel.core.mods import base_key
 from cold_steel.core.patch import PATCH_PREFIX
 from cold_steel.core.playsets import as_played
-from cold_steel.paradox.backup import backup_file
+from cold_steel.paradox.backup import backup_file, backups_of
 from cold_steel.paradox.empires import (
     Empire,
     EmpireFile,
@@ -46,8 +47,12 @@ from cold_steel.paradox.script import scan
 from cold_steel.store.empires import (
     LOOSE,
     EmpireState,
+    HistoryFile,
     ListInfo,
     ListsFile,
+    Sources,
+    VersionNote,
+    history_file,
     list_file,
     lists_file,
     load_state,
@@ -58,6 +63,7 @@ from cold_steel.store.playsets import Playset
 
 # The empire file's name when the game hasn't written one yet.
 DEFAULT_GAME_FILE = "user_empire_designs_v3.4.txt"
+KEEP_VERSIONS = 50  # each list's backups, its history (decision 113)
 
 
 def list_owner(playset: Playset) -> str:
@@ -72,6 +78,44 @@ def plays_a_build(playset: Playset) -> bool:
 
 class FormatError(Exception):
     """A list in one empire file format can't go where another is used."""
+
+
+@dataclass(frozen=True)
+class Version:
+    """A list as it was just before a change: one of its backups."""
+
+    path: Path
+    when: datetime
+    note: str  # what came next: "Imported 3 from Cold Steel Mix". "" for a backup without one
+    format: str  # its empire file format then, if known
+
+
+@dataclass(frozen=True)
+class Changes:
+    """How a list changed between two versions, by empire name."""
+
+    added: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.added or self.removed or self.changed)
+
+
+def compare(older: EmpireFile, newer: EmpireFile) -> Changes:
+    """What changed from `older` to `newer`, by name and fingerprint."""
+    before, after = fingerprints(older), fingerprints(newer)
+    return Changes(
+        tuple(n for n in after if n not in before),
+        tuple(n for n in before if n not in after),
+        tuple(n for n, d in after.items() if n in before and before[n] != d),
+    )
+
+
+def note_for(verb: str, names: Sequence[str], where: str = "") -> str:
+    """A version's note: "Removed Divine Elven Order", "Imported 3 from Cold Steel Mix"."""
+    what = names[0] if len(names) == 1 else str(len(names))
+    return f"{verb} {what}{f' {where}' if where else ''}"
 
 
 @dataclass(frozen=True)
@@ -108,11 +152,56 @@ class EmpireLists:
         except OSError:
             return []
 
-    def write(self, owner: str, data: bytes) -> None:
-        """Replace a list with these bytes, after a backup. Raises OSError."""
+    def write(self, owner: str, data: bytes, note: str = "") -> None:
+        """Replace a list with these bytes, after a backup: a version of the
+        list, noted with what came next (`note`). Raises OSError."""
         path = self.path(owner)
-        backup_file(path, self.backup_dir)
+        kept = backup_file(path, self.backup_dir, KEEP_VERSIONS)
+        if kept is not None:
+            self._note(owner, kept.name, VersionNote(note, self.info(owner).format))
         write_atomic(path, data)
+
+    def _note(self, owner: str, name: str, note: VersionNote) -> None:
+        """Keep a version's note, and drop those whose backup is gone."""
+        path = history_file(owner, self.root)
+        found = load_json(path, HistoryFile) or HistoryFile()
+        kept = {p.name for p in backups_of(self.path(owner), self.backup_dir)}
+        found.notes = {n: v for n, v in found.notes.items() if n in kept}
+        found.notes[name] = note
+        save_json(path, found)
+
+    def versions(self, owner: str) -> list[Version]:
+        """A list's versions, newest first: its backups, with their notes."""
+        found = load_json(history_file(owner, self.root), HistoryFile) or HistoryFile()
+        versions: list[Version] = []
+        for path in backups_of(self.path(owner), self.backup_dir):
+            stamp = path.name.removeprefix(f"{owner}.").removesuffix(".txt")
+            try:
+                when = datetime.strptime(stamp, "%Y-%m-%d_%H-%M-%S-%f")
+            except ValueError:
+                continue
+            note = found.notes.get(path.name, VersionNote())
+            versions.append(Version(path, when, note.note, note.format))
+        return versions[::-1]
+
+    def history_files(self, owner: str) -> list[Path]:
+        """Every file of a list's history: its versions, then their notes.
+        Clearing the history moves these to the trash; the list stays."""
+        files = backups_of(self.path(owner), self.backup_dir)
+        notes = history_file(owner, self.root)
+        return [*files, notes] if notes.exists() else files
+
+    def read_version(self, version: Version) -> EmpireFile:
+        """Raises OSError if it can't be read."""
+        return self._reader.read(version.path)
+
+    def restore(self, owner: str, version: Version) -> None:
+        """Put a version back, byte for byte, after keeping the list as it is as
+        a version of its own. Raises OSError."""
+        data = version.path.read_bytes()
+        self.write(owner, data, "Before restoring")
+        if version.format:
+            self.set_info(owner, format=version.format)
 
     def info(self, owner: str) -> ListInfo:
         """A list's format and the game that last played it. Empty if not known."""
@@ -123,13 +212,31 @@ class EmpireLists:
         """Record a list's format, or the game that played it. "" leaves one as it is."""
         found = load_json(lists_file(self.root), ListsFile) or ListsFile()
         old = found.lists.get(owner, ListInfo())
-        new = ListInfo(format or old.format, played or old.played)
+        new = msgspec.structs.replace(old, format=format or old.format, played=played or old.played)
+        if new != old:
+            found.lists[owner] = new
+            save_json(lists_file(self.root), found)
+
+    def set_sources(self, owner: str, sources: Mapping[str, Sources | None]) -> None:
+        """Record the mods each empire's things came from, by name. None forgets one."""
+        found = load_json(lists_file(self.root), ListsFile) or ListsFile()
+        old = found.lists.get(owner, ListInfo())
+        merged = {**old.sources, **sources}
+        new = msgspec.structs.replace(
+            old, sources={n: s for n, s in merged.items() if s is not None}
+        )
         if new != old:
             found.lists[owner] = new
             save_json(lists_file(self.root), found)
 
     def add(
-        self, owner: str, empires: Sequence[Empire], *, replace: bool, format: str = ""
+        self,
+        owner: str,
+        empires: Sequence[Empire],
+        *,
+        replace: bool,
+        format: str = "",
+        note: str = "",
     ) -> Added:
         """Copy empires into a list. One whose name is in it already replaces
         that one, in its place, if `replace`; otherwise it's skipped. `format`
@@ -148,27 +255,33 @@ class EmpireLists:
         texts = [incoming[e.name].text if e.name in replaced else e.text for e in current.empires]
         added = [e for e in incoming.values() if e.name not in have]
         if added or replaced:
-            self.write(owner, join_empires(current.head, [*texts, *(e.text for e in added)]))
+            self.write(owner, join_empires(current.head, [*texts, *(e.text for e in added)]), note)
             if format and (not have_format or not current.empires):
                 self.set_info(owner, format=format)
         skipped = () if replace else tuple(n for n in incoming if n in have)
         return Added(tuple(e.name for e in added), tuple(replaced), skipped)
 
-    def remove(self, owner: str, names: Collection[str]) -> tuple[str, ...]:
-        """Take empires out of a list. Returns those taken out."""
+    def remove(self, owner: str, names: Collection[str], note: str = "") -> tuple[str, ...]:
+        """Take empires out of a list. Returns those taken out. `note` is the
+        version's; by default "Removed …"."""
         current = self.read(owner)
         going = [e.name for e in current.empires if e.name in names]
         if going:
             staying = [e.text for e in current.empires if e.name not in names]
-            self.write(owner, join_empires(current.head, staying))
+            self.write(
+                owner, join_empires(current.head, staying), note or note_for("Removed", going)
+            )
+            self.set_sources(owner, dict.fromkeys(going))
         return tuple(going)
 
     def copy_list(self, source: str, target: str) -> None:
         """A copy of a playset gets a copy of its list."""
         path = self.path(source)
         if path.exists():
-            self.write(target, path.read_bytes())
-            self.set_info(target, format=self.info(source).format)
+            self.write(target, path.read_bytes(), "Copied from another playset")
+            info = self.info(source)
+            self.set_info(target, format=info.format)
+            self.set_sources(target, info.sources)
 
     def fingerprints(self) -> set[int]:
         """Every empire in every list, as a hash of its block that ignores spacing."""
@@ -348,7 +461,8 @@ def shelve_outside_changes(
     known = lists.fingerprints()
     found = [e for e in parse_empires(game_file, data).empires if digest(e.text) not in known]
     if found:
-        lists.add(LOOSE, found, replace=True, format=file_format(game_file))
+        note = note_for("Found", [e.name for e in found], "in the game's file")
+        lists.add(LOOSE, found, replace=True, format=file_format(game_file), note=note)
     save_state(msgspec.structs.replace(state, file=str(game_file), digest=_hash(data)), state_path)
     return tuple(e.name for e in found)
 
@@ -415,10 +529,11 @@ def take_back(
     before = fingerprints(lists.read(owner)) if exists(owner) else {}
     if exists(owner):
         if data != _read(lists.path(owner)):
-            lists.write(owner, data)
+            lists.write(owner, data, f"Before Play, game {game}" if game else "Before Play")
         lists.set_info(owner, format=file_format(game_file), played=game)
     elif now.empires:
-        lists.add(LOOSE, now.empires, replace=True, format=file_format(game_file))
+        note = "From a game of a playset deleted while it ran"
+        lists.add(LOOSE, now.empires, replace=True, format=file_format(game_file), note=note)
     save_state(EmpireState(owner=owner, file=str(game_file), digest=_hash(data)), state_path)
     return TakenBack(owner, tuple(changed_since(before, now)), not exists(owner))
 

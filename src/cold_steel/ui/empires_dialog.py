@@ -1,4 +1,6 @@
-"""A playset's empire list, and importing empires from another list or exporting to one."""
+"""A playset's empire list, and importing empires from another list or exporting to one.
+Its History tab lists the list's versions and restores one. It also converts
+the list to a new empire file format, and checks every list."""
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (
 from cold_steel.core.empires import KINDS, EmpireCheck, Need
 from cold_steel.paradox.empires import Empire
 from cold_steel.store.empires import LOOSE
+from cold_steel.ui.empire_history import HistoryPanel
 from cold_steel.ui.full_text import show_full_text
 
 NAME_ROLE = Qt.ItemDataRole.UserRole
@@ -55,6 +59,8 @@ def pretty(key: str) -> str:
 class EmpireRow:
     empire: Empire
     check: EmpireCheck | None = None  # against the playset shown; None until checked
+    # Why what it uses is in no installed mod, from its sources (empire_check.gone_text).
+    explained: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,8 +76,11 @@ def need_mods(need: Need, names: Mapping[str, str]) -> str:
     return " or ".join(dict.fromkeys(names.get(m, m) for m in need.mods))
 
 
-def mark(check: EmpireCheck | None, names: Mapping[str, str]) -> tuple[str, str]:
-    """The Mods column for one empire, and its tooltip."""
+def mark(
+    check: EmpireCheck | None, names: Mapping[str, str], explained: Sequence[str] = ()
+) -> tuple[str, str]:
+    """The Mods column for one empire, and its tooltip. `explained` adds what
+    its sources say about things no installed mod has."""
     if check is None:
         return "", "Checking which mods it needs…"
     if check.ok:
@@ -82,7 +91,8 @@ def mark(check: EmpireCheck | None, names: Mapping[str, str]) -> tuple[str, str]
     details = "\n".join(
         f"{KINDS.get(n.use[0], n.use[0])} {n.use[1]}: {need_mods(n, names)}" for n in check.missing
     )
-    return f"{WARNING} {lacking}", f"The playset lacks what it uses:\n{details}"
+    more = "\n\n" + "\n".join(explained) if explained else ""
+    return f"{WARNING} {lacking}", f"The playset lacks what it uses:\n{details}{more}"
 
 
 class EmpiresDialog(QDialog):
@@ -96,6 +106,12 @@ class EmpiresDialog(QDialog):
     delete_requested = Signal(tuple)
     # Show another list (owner id, or LOOSE) to import from.
     source_chosen = Signal(str)
+    # The History tab was opened: fill it with this list's versions.
+    history_requested = Signal()
+    # Convert this list to the empire file format the game uses now.
+    convert_requested = Signal()
+    # Check every list.
+    check_all_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -116,10 +132,18 @@ class EmpiresDialog(QDialog):
         self.remove_button.clicked.connect(
             lambda: self.remove_requested.emit(self._names(self.listed))
         )
+        self.convert_button = QPushButton("Convert…")
+        self.convert_button.setToolTip(
+            "Convert this list's empires to the empire file format the game uses now. "
+            "Every change is shown first"
+        )
+        self.convert_button.clicked.connect(self.convert_requested)
+        self.convert_button.hide()
         upper_buttons = QHBoxLayout()
         upper_buttons.addWidget(self.export_button)
         upper_buttons.addWidget(self.remove_button)
         upper_buttons.addStretch()
+        upper_buttons.addWidget(self.convert_button)
 
         self.source_box = QComboBox()
         self.source_box.currentIndexChanged.connect(self._source_picked)
@@ -148,17 +172,43 @@ class EmpiresDialog(QDialog):
         split.addWidget(lower)
         split.setSizes([320, 240])
 
+        self.check_button = QPushButton("Check all lists")
+        self.check_button.setToolTip(
+            "Check every playset's list against the game and the mods each playset has"
+        )
+        self.check_button.clicked.connect(self.check_all_requested)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
         bottom = QHBoxLayout()
+        bottom.addWidget(self.check_button)
         bottom.addStretch()
         bottom.addWidget(close)
 
+        # History is a tab of this window, not a window of its own.
+        self.history = HistoryPanel()
+        self.tabs = QTabWidget()
+        page = QWidget()  # the tab's margins, as the History tab has
+        QVBoxLayout(page).addWidget(split)
+        self.tabs.addTab(page, "Empires")
+        self.tabs.addTab(self.history, "History")
+        self.tabs.currentChanged.connect(self._tab_changed)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.summary)
-        layout.addWidget(split, 1)
+        layout.addWidget(self.tabs, 1)
         layout.addLayout(bottom)
         self._selection_changed()
+
+    def showing_history(self) -> bool:
+        return self.tabs.currentWidget() is self.history
+
+    def _tab_changed(self) -> None:
+        if self.showing_history():
+            self.history_requested.emit()
+
+    def show_history(self) -> None:
+        """Switch to the History tab, which asks for its versions."""
+        self.tabs.setCurrentWidget(self.history)
 
     def _tree(self) -> QTreeWidget:
         tree = QTreeWidget()
@@ -219,6 +269,8 @@ class EmpiresDialog(QDialog):
         elif marked:
             verb = "is" if marked == 1 else "are"
             sentences.append(f"{marked} {verb} marked {WARNING}: the playset lacks mods they use.")
+        self.convert_button.setVisible(bool(format_problem))
+        self.convert_button.setEnabled(not locked)
         if format_problem:
             sentences.append(f"{WARNING} {format_problem}")
         elif locked:
@@ -243,7 +295,7 @@ class EmpiresDialog(QDialog):
         tree.clear()
         for row in rows:
             empire, info = row.empire, row.empire.info
-            text, tip = mark(row.check, names) if info else (WARNING, empire.problem)
+            text, tip = mark(row.check, names, row.explained) if info else (WARNING, empire.problem)
             item = QTreeWidgetItem(
                 tree,
                 [
