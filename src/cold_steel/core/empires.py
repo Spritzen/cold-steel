@@ -4,7 +4,7 @@ handing a list to the game while it runs.
     lists = EmpireLists(empires_dir(), backup_dir)
     put_in_game(lists, list_owner(playset), game_file, state_path, backup_dir)
     ... the game runs ...
-    take_back(lists, state_path, backup_dir, exists)
+    take_back(lists, state_path, exists)
 
 Each playset has its own list of empires (decision 107), and a built playset
 uses the list of the playset it was built from (decision 98). A list is kept

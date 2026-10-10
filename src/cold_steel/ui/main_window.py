@@ -2446,7 +2446,7 @@ class MainWindow(QMainWindow):
 
     def _tell_after_update(self, report: CheckReport) -> None:
         """After the game's version changed or a mod changed, say if any empire
-        is marked (decision 114). What the check saw is kept in checked.json."""
+        is marked (decision 123). What the check saw is kept in checked.json."""
         library, index, root = self.library, self._index, self.empire_lists.root
         if library is None or index is None or not root.exists():
             return
