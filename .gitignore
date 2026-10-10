@@ -18,6 +18,7 @@ dist/
 .directory
 
 # Kept locally, not in the repo
+.update-check/
 .devcontainer/
 docs/
 CLAUDE.md

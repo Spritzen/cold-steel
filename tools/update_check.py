@@ -13,7 +13,9 @@ the baseline: a new game folder, a new empire file, a mod Steam updated. Each
 names what in Cold Steel reads it.
 
 It only reads, so it's safe while the game or the launcher is open. The
-baseline and the patch notes are kept in ~/.local/share/cold-steel/update-check/.
+baseline and the patch notes are kept in the repo's .update-check/ folder,
+git-ignored. Not in Cold Steel's data folder: the dev container mounts that
+read-only, and the repo is the one folder the host and the container share.
 """
 
 import argparse
@@ -133,7 +135,7 @@ class Problem:
 
 
 def check_dir() -> Path:
-    return paths.data_dir() / "update-check"
+    return Path(__file__).resolve().parent.parent / ".update-check"
 
 
 def baseline_file() -> Path:
