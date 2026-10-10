@@ -33,6 +33,14 @@ OK, WARNING = "✓", "⚠"
 _PREFIXES = ("origin_", "civic_", "ethic_", "auth_", "gov_")
 
 
+def species_name(key: str) -> str:
+    """A species' name. One you picked from the game's names is stored as its
+    text key: "SPEC_Korinth" -> "Korinth". One you typed is kept as typed."""
+    if not key.startswith("SPEC_"):
+        return key
+    return " ".join(key.removeprefix("SPEC_").split("_"))
+
+
 def pretty(key: str) -> str:
     """A key as a name: "ethic_fanatic_spiritualist" -> "Fanatic Spiritualist"."""
     for prefix in _PREFIXES:
@@ -206,7 +214,7 @@ class EmpiresDialog(QDialog):
             mark, tip = _mark(row.check, names) if info else (WARNING, empire.problem)
             texts = [
                 empire.name,
-                info.species if info else "",
+                species_name(info.species) if info else "",
                 pretty(info.origin) if info else "",
                 ", ".join(pretty(e) for e in info.ethics) if info else "",
                 ", ".join(pretty(c) for c in info.civics) if info else "",
@@ -222,6 +230,7 @@ class EmpiresDialog(QDialog):
                 keys = (info.origin, ", ".join(info.ethics), ", ".join(info.civics))
                 for col, key in zip((2, 3, 4), keys, strict=True):
                     item.setToolTip(col, key)
+                item.setToolTip(1, info.species)
                 item.setToolTip(5, info.authority)
             item.setSelected(empire.name in selected)
 

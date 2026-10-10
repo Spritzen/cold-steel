@@ -2050,3 +2050,33 @@ def test_a_built_playset_shows_the_empires_of_its_source(
     assert clashing.empires_button.text() == "Empires (1)"
     plan = clashing._hide_empires_plan(built)
     assert plan is not None and plan.names == (ELVES_EMPIRE,)  # Main's empire stays
+
+
+def test_an_empire_made_in_a_built_playset_is_bound_to_its_source_too(
+    qtbot: QtBot, clashing: MainWindow, sample_install: SampleInstall
+) -> None:
+    from cold_steel.core.empires import fingerprints
+
+    assert clashing.book is not None and clashing.empire_book is not None
+    main = clashing.book.playsets[0]
+    elves = empire_block(ELVES_EMPIRE)
+    write_empires(sample_install.data_dir, elves)
+    build(qtbot, clashing)
+    built = built_playset(clashing)
+    # As Play leaves things for the built playset, then the game writes a new empire.
+    clashing._played = (built.id, 0)
+    clashing._empires_before = fingerprints(clashing._read_empires())
+    write_empires(sample_install.data_dir, empire_block("Made in Build"), elves)
+    clashing._bind_played_empires()
+    assert clashing.empire_book.playsets_of("Made in Build") == (built.id, main.id)
+    assert clashing.empire_book.get(ELVES_EMPIRE) is None  # unchanged: left unbound
+    message = clashing.statusBar().currentMessage()
+    assert "bound to Main Playset (built) and Main Playset: Made in Build" in message
+
+
+def test_species_names_picked_from_the_games_names_are_tidied() -> None:
+    from cold_steel.ui.empires_dialog import species_name
+
+    assert species_name("SPEC_Korinth") == "Korinth"
+    assert species_name("SPEC_Blorg_Commonality") == "Blorg Commonality"
+    assert species_name("Elf") == "Elf"  # typed by you: kept as typed

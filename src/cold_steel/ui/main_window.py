@@ -2362,7 +2362,7 @@ class MainWindow(QMainWindow):
 
     def _bind_played_empires(self) -> None:
         """Bind the empires made or changed in the game Play started to the
-        playset it played."""
+        playset it played, and for a built playset to its source too (decision 105)."""
         before, self._empires_before = self._empires_before, None
         played, book, playsets = self._played, self.empire_book, self.book
         if before is None or played is None or book is None or playsets is None:
@@ -2371,8 +2371,12 @@ class MainWindow(QMainWindow):
         changed = changed_since(before, self._read_empires())
         if playset is None or not changed:
             return
-        book.bind(changed, playset.id)
-        self.statusBar().showMessage(f"Empire(s) bound to {playset.name}: {', '.join(changed)}")
+        targets = [playset, *(p for s in shown_for(playset) if (p := playsets.get(s)))]
+        targets = list({p.id: p for p in targets}.values())  # the played one first, once
+        for target in targets:
+            book.bind(changed, target.id)
+        names = " and ".join(p.name for p in targets)
+        self.statusBar().showMessage(f"Empire(s) bound to {names}: {', '.join(changed)}")
         self._show_empires(self.selected_playset())
 
     def _empires_unbound_text(self, playset: Playset) -> str:

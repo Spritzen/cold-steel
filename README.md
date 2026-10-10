@@ -201,7 +201,8 @@ Like saves, **this needs the game's cloud autosaves turned off.**
   playset that has every mod they need: **Bind all suggested** takes them.
   Right-click binds an empire to another playset, unbinds it or deletes it.
 - An empire can belong to several playsets. A built playset also shows the
-  empires of the playset it was built from.
+  empires of the playset it was built from, and an empire you make while
+  playing it belongs to both.
 - **Play and Continue keep other playsets' empires out of the game's empire
   list**, and put them back when the game closes.
 
