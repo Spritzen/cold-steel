@@ -149,8 +149,8 @@ shows what changed. You can accept the update or keep your copy.
 ### Build one mod
 
 **Build** merges the whole playset, with its patch mod, into one mod, and
-makes a playset that plays just that mod. The build report shows where every
-file came from. A built mod is for your own use only. It contains other
+makes a playset that plays just that mod, and selects it, so playing the
+build is one click away. The build report shows where every file came from. A built mod is for your own use only. It contains other
 authors' work, so don't upload it.
 
 ### Saves
@@ -184,6 +184,31 @@ Until you turn them off in the game's settings, none of this shows.
 - **Build** on a playset that was built before asks what to do with the saves
   of the built playset: keep each one, or let it go. The local files of saves
   you let go are moved to the trash only if you tick that box.
+
+### Empires
+
+The game keeps every empire you design in one list, whatever mods you play
+with. An empire made with a mod's planet class still shows in a playset
+without that mod, and the game can change it there. In Cold Steel, each
+playset has its own list of empires, and the game gets exactly that list.
+Like saves, **this needs the game's cloud autosaves turned off.**
+
+![The Empires window: a playset's empires, each marked with the mods it needs](screenshots/empires-dark.png)
+
+- **Empires…** shows the playset's list. Each empire is marked ✓ when the
+  playset has every mod it uses, or ⚠ with the mods it lacks.
+- **▶ Play** and **Continue** give the game the playset's list. An empire you
+  make, change or delete in game is kept in that list when the game closes,
+  and no other playset sees the change.
+- **Import from** copies empires from another playset's list. **Export to
+  playset** copies them to another, and asks first if it lacks mods they use.
+  An empire of the same name asks whether to replace it or skip.
+- Empires that are in no playset's list are under **Not in any playset**:
+  the ones you had before, and any made in a game started from the launcher.
+  Import them into a playset, or delete them.
+- A built playset uses the list of the playset it was built from.
+- If a game update changes the empire file's format, Play won't give the game
+  a list in the old one, and says why.
 
 ### Share playsets
 
@@ -241,6 +266,10 @@ never downloads anything. It changes Paradox's files only when you ask:
   other playsets' saves from `save games/` to `cold_steel_hidden_saves/`
   beside it while the game runs, then move them back. No file in them
   changes. If Cold Steel closes first, it moves them back when it next starts.
+- **Play** and **Continue**, with cloud autosaves off, replace the game's
+  empire file with the playset's list of empires, and copy it back into the
+  list when the game closes. Each empire is copied byte for byte. If Cold
+  Steel closes first, it copies it back when it next starts.
 - **Export to launcher** and **Open in launcher** write the playset into the
   launcher's database. **Sync launcher** writes all of them, and removes the
   launcher's others.
@@ -259,7 +288,7 @@ launcher or the game is open.
 | Folder | What's in it |
 |---|---|
 | `~/.config/cold-steel/` | Your settings |
-| `~/.local/share/cold-steel/` | Your playsets, which playset each save belongs to, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
+| `~/.local/share/cold-steel/` | Your playsets, which playset each save belongs to, each playset's empires, conflict choices, patch mods, pinned copies, builds, and backups of the Paradox files |
 | `~/.cache/cold-steel/` | What it remembers about your mods, so it opens fast. Safe to delete |
 
 ## What it won't do

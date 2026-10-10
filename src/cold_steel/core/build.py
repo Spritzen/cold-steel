@@ -135,10 +135,17 @@ class BuildStamp(msgspec.Struct):
 
     built: str = ""
     built_playset: str = ""
+    order: tuple[str, ...] = ()  # the mods inside it, in load order
 
 
 def load_stamp(root: Path, playset_id: str) -> BuildStamp | None:
     return load_json(root / f"{playset_id}.json", BuildStamp)
+
+
+def built_mods(root: Path, playset_id: str) -> tuple[str, ...]:
+    """The mods inside a playset's build, by key. Empty if it wasn't built."""
+    stamp = load_stamp(root, playset_id)
+    return stamp.order if stamp else ()
 
 
 def save_record(root: Path, record: BuildRecord) -> None:
