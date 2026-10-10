@@ -2,7 +2,10 @@
 
     empires/<playset id>.txt   one playset's empires, in the game's own format
     empires/loose.txt          empires that are in no playset's list yet
-    empires/lists.json         each list's empire file format, and the game it last played
+    empires/lists.json         each list's empire file format, the game it last
+                               played, and the mods each empire's things came from
+    empires/history/<id>.json  a note on each of a list's versions (its backups)
+    empires/checked.json       the game and mods the last empire check saw
     empires_in_game.json       whose list the game's empire file holds
 
 A list is the game's empire file for that playset: Play copies it into the
@@ -31,6 +34,34 @@ class EmpireState(msgspec.Struct):
     running: bool = False  # Play put the list in, and the game hasn't closed since
 
 
+class Source(msgspec.Struct, frozen=True):
+    """A mod that defined something an empire uses."""
+
+    mod: str  # its key, without a pinned copy's suffix
+    name: str
+    version: str  # its descriptor's version: "3.2". Many Workshop mods have none
+    updated: str = ""  # the date of its newest file, which a Steam update changes: "2026-09-22"
+
+
+class UseSources(msgspec.Struct, frozen=True):
+    folder: str  # the folder that defines it: "common/planet_classes"
+    key: str  # "pc_pd_cold_superhabitable"
+    mods: tuple[Source, ...] = ()  # empty: no installed mod defined it even then
+
+
+class Sources(msgspec.Struct, frozen=True):
+    """The mods that supplied an empire's modded things, recorded when it
+    entered its list (Phase 10)."""
+
+    digest: int  # the block they were recorded for (definitions.digest)
+    uses: tuple[UseSources, ...] = ()
+    # Found by the first check, for an empire already in its list: the mods
+    # installed then, not what it was made with (decision 116).
+    later: bool = False
+    # It entered the list before the mods were known: the next check records them.
+    pending: bool = False
+
+
 class ListInfo(msgspec.Struct, frozen=True):
     """What a list's blocks were written by."""
 
@@ -38,6 +69,7 @@ class ListInfo(msgspec.Struct, frozen=True):
     # "" until known. Play won't give a list to a game that uses another (decision 112).
     format: str = ""
     played: str = ""  # the game version that last played it: "v4.5.2"
+    sources: dict[str, Sources] = msgspec.field(default_factory=dict)  # by empire name
 
 
 class ListsFile(msgspec.Struct):
@@ -45,8 +77,34 @@ class ListsFile(msgspec.Struct):
     lists: dict[str, ListInfo] = msgspec.field(default_factory=dict)  # by owner
 
 
+class VersionNote(msgspec.Struct, frozen=True):
+    note: str = ""  # what came next: "Imported 3 from Cold Steel Mix", "Before Play, game v4.5.2"
+    format: str = ""  # the list's empire file format then
+
+
+class HistoryFile(msgspec.Struct):
+    version: int = STATE_VERSION
+    notes: dict[str, VersionNote] = msgspec.field(default_factory=dict)  # by backup's file name
+
+
+class Checked(msgspec.Struct):
+    """What the last empire check saw, to tell when the game or a mod changed."""
+
+    version: int = STATE_VERSION
+    game: str = ""  # "v4.5.2"
+    layers: dict[str, int] = msgspec.field(default_factory=dict)  # each mod's index fingerprint
+
+
 def lists_file(root: Path) -> Path:
     return root / "lists.json"
+
+
+def history_file(owner: str, root: Path) -> Path:
+    return root / "history" / f"{owner}.json"
+
+
+def checked_file(root: Path) -> Path:
+    return root / "checked.json"
 
 
 def empires_dir() -> Path:

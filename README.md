@@ -208,8 +208,18 @@ Like saves, **this needs the game's cloud autosaves turned off.**
   the ones you had before, and any made in a game started from the launcher.
   Import them into a playset, or delete them.
 - A built playset uses the list of the playset it was built from.
+- The **History** tab lists each version of a playset's list, the last 50:
+  what each change did, such as "Imported 3 from Cold Steel Mix" or "Before
+  Play". **Restore** puts one back. The list as it was is kept at the top, so
+  a restore can be undone the same way.
+- **Check all lists** checks every list against the game and the mods each
+  playset has, and says why an empire won't work: a mod gone or updated, or a
+  mod the playset lacks. It also runs on its own after the game or a mod
+  updates, and a line above the mod list names the selected playset's marked
+  empires.
 - If a game update changes the empire file's format, Play won't give the game
-  a list in the old one, and says why.
+  a list in the old one, and says why. **Convert…** converts it when Cold
+  Steel knows the change, showing every change first.
 
 ### Share playsets
 

@@ -186,3 +186,26 @@ def add_empire_definitions(game_dir: Path) -> None:
     for name, data in files.items():
         (game_dir / name).parent.mkdir(parents=True, exist_ok=True)
         (game_dir / name).write_bytes(data)
+
+
+@pytest.fixture
+def catalog_install(sample_install: SampleInstall) -> SampleInstall:
+    """The game defines the desert planet class and every other thing the
+    empires use. Alpha adds a continental one; Beta adds it too."""
+    install = sample_install.root / "games/steamapps/common/Stellaris"
+    mods = {
+        sample_install.workshop_dir / "2000000001/common/planet_classes/alpha.txt": (
+            b"pc_continental = { }\n"
+        ),
+        sample_install.workshop_dir / "2000000002/common/planet_classes/beta.txt": (
+            b"pc_continental = { }\n"
+        ),
+        sample_install.workshop_dir / "2000000002/common/species_classes/beta.txt": (
+            b"BETA_CLASS = { }\n"
+        ),
+    }
+    add_empire_definitions(install)
+    for path, data in mods.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return sample_install
