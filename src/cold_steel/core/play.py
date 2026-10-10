@@ -11,13 +11,16 @@ A playset with no saves leaves the file alone. Continue also starts the game
 with `--continuelastsave`, which opens it at once, skipping the main menu.
 
 With local autosaves, both first hide saves bound to other playsets from the
-game's Load menu (core/hide.py). They're put back when the game closes.
+game's Load menu (core/hide.py), and empires bound only to other playsets from
+its empire list (core/empires.py). They're put back when the game closes.
 """
 
+import contextlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cold_steel.core.empires import hide_empires, restore_empires
 from cold_steel.core.hide import hidden_dir, hide, restore
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
@@ -41,6 +44,13 @@ class HidePlan:
 
 
 @dataclass(frozen=True)
+class HideEmpiresPlan:
+    names: tuple[str, ...]  # the empires to hide, by name
+    file: Path  # the game's empire file
+    record: Path  # hidden_empires.txt, where they're kept meanwhile
+
+
+@dataclass(frozen=True)
 class PlayPlan:
     load: DlcLoad
     # mod/*.mod files the game needs but that don't exist yet: path -> text
@@ -50,6 +60,7 @@ class PlayPlan:
     continue_from: ContinueGame | None = None
     skip_menu: bool = False  # open it at once, skipping the main menu: Continue
     hide: HidePlan | None = None  # saves of other playsets, kept out of the Load menu
+    hide_empires: HideEmpiresPlan | None = None  # empires of other playsets, kept out too
 
 
 def plan_play(playset: Playset, library: Library) -> PlayPlan:
@@ -100,6 +111,13 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
             )
         except OSError as error:
             raise PlayError(f"Couldn't hide other playsets' saves: {error}") from error
+    if plan.hide_empires is not None:
+        empires = plan.hide_empires
+        try:
+            hide_empires(empires.names, empires.file, empires.record, backup_dir)
+        except OSError as error:
+            _put_back(plan, backup_dir)
+            raise PlayError(f"Couldn't hide other playsets' empires: {error}") from error
     extra = (CONTINUE_ARG,) if plan.continue_from and plan.skip_menu else ()
     try:
         # Its own session, so closing Cold Steel doesn't close the game.
@@ -112,9 +130,17 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
             start_new_session=True,
         )
     except OSError as error:
-        if plan.hide is not None:
-            restore(plan.hide.record)
+        _put_back(plan, backup_dir)
         raise PlayError(f"Couldn't start {game.exe}: {error}") from error
+
+
+def _put_back(plan: PlayPlan, backup_dir: Path) -> None:
+    """The game didn't start: put back what was hidden for it."""
+    if plan.hide is not None:
+        restore(plan.hide.record)
+    if plan.hide_empires is not None:
+        with contextlib.suppress(OSError):  # left in the record, put back at the next start
+            restore_empires(plan.hide_empires.record, backup_dir)
 
 
 def write_plan(plan: PlayPlan, game: Game, backup_dir: Path) -> None:

@@ -19,12 +19,19 @@ from cold_steel.store.playsets import Playset
 from cold_steel.store.settings import Settings
 from cold_steel.ui import main_window as main_window_module
 from cold_steel.ui.conflicts_window import ConflictsWindow
+from cold_steel.ui.empires_dialog import NAME_ROLE, EmpiresDialog
 from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
 from cold_steel.ui.rebuild_dialog import RebuildChoice
 from cold_steel.ui.saves_dialog import FOLDER_ROLE, SavesDialog
-from conftest import SampleInstall, make_save
+from conftest import (
+    SampleInstall,
+    add_empire_definitions,
+    empire_block,
+    make_save,
+    write_empires,
+)
 
 
 def test_window_opens_and_closes(qtbot: QtBot) -> None:
@@ -1712,7 +1719,7 @@ def test_settings_show_whether_autosaves_go_to_steam_cloud(qtbot: QtBot) -> None
     dialog = SettingsDialog(Settings(), None)  # no game found: nothing to say
     qtbot.addWidget(dialog)
     assert not dialog.cloud.isVisibleTo(dialog)
-    assert "saves features" in dialog.cloud_hint.text()
+    assert "saves and empires features" in dialog.cloud_hint.text()
 
 
 def saves_not_read_yet(qtbot: QtBot, window: MainWindow) -> None:
@@ -1761,3 +1768,274 @@ def test_a_waiting_rebuild_is_dropped_when_another_playset_is_chosen(
         clashing.playset_list.setCurrentRow(2)
     assert clashing._build_task is None
     assert "Build cancelled" in clashing.statusBar().currentMessage()
+
+
+# Empires. The sample install keeps autosaves local, so the empires features are on.
+
+ELVES_EMPIRE, UNE_EMPIRE = "Divine Elven Order", "United Nations of Earth"
+
+
+@pytest.fixture
+def with_empires(qtbot: QtBot, window: MainWindow, sample_install: SampleInstall) -> MainWindow:
+    """Two empires: the Elves use only the game's things, the United Nations
+    use a planet class that only Alpha (in Main Playset) adds."""
+    assert window.library is not None
+    add_empire_definitions(window.library.game.install_dir)
+    alpha = sample_install.workshop_dir / "2000000001/common/planet_classes/alpha.txt"
+    alpha.parent.mkdir(parents=True, exist_ok=True)
+    alpha.write_bytes(b"pc_continental = { }\n")
+    write_empires(
+        sample_install.data_dir,
+        empire_block(ELVES_EMPIRE),
+        empire_block(UNE_EMPIRE, "pc_continental"),
+    )
+    with qtbot.waitSignal(window.library_shown, timeout=10_000):
+        window.rescan()  # finds Alpha's new file
+    return window
+
+
+def open_empires(qtbot: QtBot, window: MainWindow) -> EmpiresDialog:
+    """Open the Empires window for the selected playset, once their mods are checked."""
+    with qtbot.waitSignal(window.empires_checked, timeout=20_000):
+        window.empires_action.trigger()
+    dialog = window._empires_dialog
+    assert dialog is not None and dialog.isVisible()
+    return dialog
+
+
+def empire_names(tree: QTreeWidget) -> list[str]:
+    items = (tree.topLevelItem(row) for row in range(tree.topLevelItemCount()))
+    return [item.data(0, NAME_ROLE) for item in items if item is not None]
+
+
+def menu_action(menu: QMenu, text: str) -> QAction:
+    """An action in a menu or one of its submenus, by its text."""
+    for act in menu.actions():
+        if act.text() == text:
+            return act
+        if (sub := act.menu()) is not None and isinstance(sub, QMenu):
+            for inner in sub.actions():
+                if inner.text() == text:
+                    return inner
+    raise AssertionError(f"{text} isn't in the menu")
+
+
+def test_the_empires_window_shows_each_empire_and_the_mods_it_needs(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = with_empires
+    assert window.book is not None and window.empire_book is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    window.bind_empires([ELVES_EMPIRE], second.id)
+    window.playset_list.setCurrentRow(1)  # Main Playset, which has Alpha
+    assert window.empires_button.isVisibleTo(window)
+    assert window.empires_button.text() == "Empires"
+
+    dialog = open_empires(qtbot, window)
+    assert empire_names(dialog.bound) == []
+    assert empire_names(dialog.unbound) == [UNE_EMPIRE]  # the Elves belong to Second only
+    assert row_text(dialog.unbound.topLevelItem(0)) == [
+        UNE_EMPIRE,
+        "Elf",
+        "Life Seeded",
+        "Militarist, Fanatic Spiritualist",
+        "Ascensionists, Chosen",
+        "Imperial",
+        "✓",
+        "Main Playset",  # suggested: it has the one mod the empire needs
+    ]
+    dialog.suggested_button.click()
+    assert window.empire_book.playsets_of(UNE_EMPIRE) == (main.id,)
+    assert empire_names(dialog.bound) == [UNE_EMPIRE]
+    assert window.empires_button.text() == "Empires (1)"
+
+    # Bound to Second as well, which lacks Alpha.
+    menu_action(dialog.menu_for(dialog.bound, (UNE_EMPIRE,)), "Second Playset").trigger()
+    window.playset_list.setCurrentRow(2)
+    assert empire_names(dialog.bound) == [ELVES_EMPIRE, UNE_EMPIRE]
+    une = dialog.bound.topLevelItem(1)
+    assert une is not None and une.text(6) == "⚠ Alpha Interface"
+    assert "planet class pc_continental: Alpha Interface" in une.toolTip(6)
+    assert "1 of them is marked ⚠" in dialog.summary.text()
+
+    menu_action(dialog.menu_for(dialog.bound, (UNE_EMPIRE,)), "Unbind from this playset").trigger()
+    assert window.empire_book.playsets_of(UNE_EMPIRE) == (main.id,)
+    assert empire_names(dialog.bound) == [ELVES_EMPIRE]
+
+    # Delete asks, backs the file up, and forgets its bindings.
+    file = sample_install.data_dir / "user_empire_designs_v3.4.txt"
+    asked: list[str] = []
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return True
+
+    monkeypatch.setattr(window, "confirm", confirm)
+    menu_action(dialog.menu_for(dialog.bound, (ELVES_EMPIRE,)), "Delete…").trigger()
+    assert ELVES_EMPIRE in asked[0]
+    assert file.read_bytes() == empire_block(UNE_EMPIRE, "pc_continental")
+    assert window.empire_book.get(ELVES_EMPIRE) is None
+    assert list(window.backup_dir.glob("user_empire_designs_v3.4.*.txt"))
+    assert empire_names(dialog.bound) == []
+
+
+def test_play_hides_other_playsets_empires_and_binds_the_ones_made_in_game(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    from cold_steel.paradox import processes
+
+    window = with_empires
+    assert window.book is not None and window.empire_book is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    window.bind_empires([UNE_EMPIRE], main.id)
+    file = sample_install.data_dir / "user_empire_designs_v3.4.txt"
+    une = empire_block(UNE_EMPIRE, "pc_continental")
+
+    class Game:
+        exit_code: int | None = None
+
+        def poll(self) -> int | None:
+            return self.exit_code
+
+    game = Game()
+
+    def popen(args: list[str], **kwargs: object) -> Game:
+        assert file.read_bytes() == empire_block(ELVES_EMPIRE)  # hidden before it starts
+        return game
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    window.library.game.exe.write_text("#!/bin/sh\n")  # type: ignore[union-attr]
+    window.playset_list.setCurrentRow(2)  # Second Playset
+    window.play_action.trigger()
+    assert "1 empire(s) of other playsets are hidden" in window.statusBar().currentMessage()
+
+    # In the game: the Elves are changed, and a new empire is made.
+    changed, made = empire_block(ELVES_EMPIRE, "pc_arid"), empire_block("Made in Game")
+    file.write_bytes(changed + made)
+    game.exit_code = 0
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._check_game()
+    assert file.read_bytes() == changed + made + une  # as the game left it, and put back
+    assert window.empire_book.playsets_of(ELVES_EMPIRE) == (second.id,)
+    assert window.empire_book.playsets_of("Made in Game") == (second.id,)
+    assert window.empire_book.playsets_of(UNE_EMPIRE) == (main.id,)
+    assert not (sample_install.home / ".local/share/cold-steel/hidden_empires.txt").exists()
+
+
+def test_empires_left_hidden_come_back_when_cold_steel_starts(
+    qtbot: QtBot,
+    sample_install: SampleInstall,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cold_steel.core.empires import hidden_empires_file, hide_empires
+    from cold_steel.paradox import processes
+
+    elves, une = empire_block(ELVES_EMPIRE), empire_block(UNE_EMPIRE)
+    file = write_empires(sample_install.data_dir, elves, une)
+    hide_empires({UNE_EMPIRE}, file, hidden_empires_file(), tmp_path / "data/backups")
+    game_running = True  # then Cold Steel crashed
+    monkeypatch.setattr(
+        processes, "running", lambda names: game_running and names == processes.GAME
+    )
+    win = MainWindow(
+        Scanner(*sample_install.scanner_args()),
+        tmp_path / "thumbnails",
+        playsets_path=tmp_path / "data/playsets.json",
+        backup_dir=tmp_path / "data/backups",
+    )
+    qtbot.addWidget(win)
+    with qtbot.waitSignal(win.library_shown, timeout=10_000):
+        win.show()
+    assert file.read_bytes() == elves  # the game still runs: nothing is written
+    assert win._game_timer.isActive()
+
+    game_running = False
+    with qtbot.waitSignal(win.saves_found, timeout=10_000):
+        win._check_game()
+    assert file.read_bytes() == elves + une
+    assert not hidden_empires_file().exists()
+
+
+def test_the_empires_features_are_off_while_autosaves_go_to_steam_cloud(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = with_empires
+    assert window.book is not None and window.empire_book is not None
+    main = window.book.playsets[0]
+    window.bind_empires([UNE_EMPIRE], main.id)
+    window.playset_list.setCurrentRow(2)
+
+    settings = sample_install.data_dir / "settings.txt"
+    settings.write_text("autosave_tocloud=yes\n")
+    plans = played_with(window, monkeypatch)
+    window.play_action.trigger()
+    (plan,) = plans
+    assert plan.hide_empires is None
+    assert not window.empires_button.isVisibleTo(window)
+    assert not window.empires_action.isVisible()
+    assert window._read_empires() is None  # not even read
+    assert window._empires_unbound_text(main) == ""  # Delete doesn't mention them
+
+    settings.write_text("autosave=4\n")  # turned off in the game: back, bindings and all
+    window._read_saves_setting()
+    window.playset_list.setCurrentRow(1)
+    assert window.empires_button.isVisibleTo(window)
+    assert window.empires_button.text() == "Empires (1)"
+
+
+def test_copying_or_deleting_a_playset_keeps_its_empires(
+    qtbot: QtBot, with_empires: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = with_empires
+    assert window.book is not None and window.empire_book is not None
+    main = window.book.playsets[0]
+    window.bind_empires([UNE_EMPIRE], main.id)
+    window.playset_list.setCurrentRow(1)
+    monkeypatch.setattr(window, "ask_text", lambda *args: "Copied")
+    window.copy_playset()
+    copied = window.selected_playset()
+    assert copied is not None
+    assert window.empire_book.playsets_of(UNE_EMPIRE) == (main.id, copied.id)
+
+    asked: list[str] = []
+
+    def confirm(title: str, text: str) -> bool:
+        asked.append(text)
+        return True
+
+    monkeypatch.setattr(window, "confirm", confirm)
+    window.delete_playset()
+    assert "Its empire loses this binding. It stays in the game." in asked[0]
+    assert window.empire_book.playsets_of(UNE_EMPIRE) == (main.id,)
+
+
+def test_a_built_playset_shows_the_empires_of_its_source(
+    qtbot: QtBot, clashing: MainWindow, sample_install: SampleInstall
+) -> None:
+    assert clashing.book is not None and clashing.empire_book is not None
+    main, second = clashing.book.playsets[0], clashing.book.playsets[1]
+    write_empires(sample_install.data_dir, empire_block(ELVES_EMPIRE), empire_block(UNE_EMPIRE))
+    clashing.bind_empires([UNE_EMPIRE], main.id)
+    clashing.bind_empires([ELVES_EMPIRE], second.id)
+    build(qtbot, clashing)
+    built = built_playset(clashing)
+    clashing.playset_list.setCurrentRow(
+        next(i for i, p in enumerate(clashing.book.playsets, 1) if p.id == built.id)
+    )
+    assert clashing.selected_playset() == built
+    assert clashing.empires_button.text() == "Empires (1)"
+    plan = clashing._hide_empires_plan(built)
+    assert plan is not None and plan.names == (ELVES_EMPIRE,)  # Main's empire stays

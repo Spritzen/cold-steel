@@ -21,7 +21,7 @@ def load_msgpack[T](path: Path, type_: type[T]) -> T | None:
 
 
 def save_msgpack(path: Path, value: Any) -> None:
-    _write_atomic(path, msgspec.msgpack.encode(value))
+    write_atomic(path, msgspec.msgpack.encode(value))
 
 
 def load_json[T](path: Path, type_: type[T]) -> T | None:
@@ -32,10 +32,10 @@ def load_json[T](path: Path, type_: type[T]) -> T | None:
 
 
 def save_json(path: Path, value: Any) -> None:
-    _write_atomic(path, msgspec.json.format(msgspec.json.encode(value)) + b"\n")
+    write_atomic(path, msgspec.json.format(msgspec.json.encode(value)) + b"\n")
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
+def write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
