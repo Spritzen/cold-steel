@@ -1,0 +1,39 @@
+# Runs `make check` on every pull request and on main (decision 99).
+# Arch, with the same pacman packages as the dev container, so ruff, mypy,
+# Python and Qt match. Keep the package list in step with .devcontainer/Dockerfile.
+
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Docker's official image, from Amazon's public copy: Docker Hub limits anonymous
+    # pulls, and GitHub's runners share addresses (decision 99).
+    container: public.ecr.aws/docker/library/archlinux:latest
+    steps:
+      - name: Install packages
+        run: |
+          pacman -Syu --noconfirm --needed \
+              git make python \
+              pyside6 python-msgspec python-xxhash \
+              python-pytest python-pytest-qt python-pytest-benchmark \
+              ruff mypy ttf-dejavu
+
+      - uses: actions/checkout@v5
+
+      # Window tests run offscreen. The real-install tests skip themselves:
+      # there's no Stellaris here.
+      - name: make check
+        run: make check
