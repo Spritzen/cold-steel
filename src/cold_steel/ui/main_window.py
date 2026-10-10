@@ -208,6 +208,9 @@ TAGS_SHARE = 0.75
 WIDEST_HEALTH = "99 warnings"
 # Old copies named above the mod list; Conflicts lists the rest.
 OLD_COPIES_SHOWN = 3
+# The window's starting size, before the Empires button widens it. It's also
+# the least width the window keeps when it sizes itself to the mod list.
+START_WIDTH, START_HEIGHT = 1200, 760
 
 
 class MainWindow(QMainWindow):
@@ -258,7 +261,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cold Steel")
-        self.resize(1200, 760)
         self.settings = settings or Settings()
 
         self.tasks = TaskRunner(self)
@@ -356,6 +358,10 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_message_page())
         self.setCentralWidget(self.pages)
         self._build_status_bar()
+        # Wider by the Empires button and its gap, so the playset bar keeps its room.
+        bar = self.playset_bar.layout()
+        added = self.empires_button.sizeHint().width() + (bar.spacing() if bar else 0)
+        self.resize(START_WIDTH + added, START_HEIGHT)
         self._read_saves_setting()  # off until the game is found
 
         if scan is not None:

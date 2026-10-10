@@ -47,6 +47,17 @@ def test_window_opens_and_closes(qtbot: QtBot) -> None:
     assert not window.isVisible()
 
 
+def test_the_window_starts_wider_by_the_empires_button(qtbot: QtBot) -> None:
+    from cold_steel.ui.main_window import START_WIDTH
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    bar = window.playset_bar.layout()
+    assert bar is not None
+    added = window.empires_button.sizeHint().width() + bar.spacing()
+    assert added > 0 and window.width() == START_WIDTH + added
+
+
 @pytest.fixture
 def window(qtbot: QtBot, sample_install: SampleInstall, tmp_path: Path) -> MainWindow:
     win = MainWindow(
