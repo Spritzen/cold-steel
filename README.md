@@ -78,7 +78,8 @@ properties.
 ### Playsets
 
 A playset is a list of mods, in the order the game loads them. Pick one on the
-left to see its mods. Then you can:
+left, where playsets are listed by name under *All mods*, to see its mods.
+Then you can:
 
 - **Turn mods on and off** with the tick box, and **drag** them into order.
 - **Add mods** from **All mods**: select them, right-click, **Add to playset**.

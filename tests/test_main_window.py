@@ -245,21 +245,38 @@ def test_new_rename_copy_delete(window: MainWindow, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(window, "ask_text", lambda *args: next(answers))
     monkeypatch.setattr(window, "confirm", lambda *args: True)
 
+    # The sidebar keeps its playsets in name order, under All mods.
     window.new_action.trigger()
-    assert sidebar(window)[-1] == "Fresh (0)"
+    assert sidebar(window) == [
+        "All mods (5)",
+        "Fresh (0)",
+        "Main Playset (4)",
+        "Second Playset (1)",
+    ]
     assert window.selected_playset() is not None
-    window.rename_action.trigger()
+    window.rename_action.trigger()  # moves, and stays selected
+    assert sidebar(window)[2] == "Renamed (0)"
+    selected = window.selected_playset()
+    assert selected is not None and selected.name == "Renamed"
     window.copy_action.trigger()
-    assert sidebar(window)[-2:] == ["Renamed (0)", "Renamed copy (0)"]
+    assert sidebar(window)[2:4] == ["Renamed (0)", "Renamed copy (0)"]
 
     window.delete_action.trigger()
     assert sidebar(window) == [
         "All mods (5)",
         "Main Playset (4)",
-        "Second Playset (1)",
         "Renamed (0)",
+        "Second Playset (1)",
     ]
     assert window.playset_list.currentRow() == 0
+
+
+def test_all_mods_has_a_line_under_it(window: MainWindow) -> None:
+    from cold_steel.ui.main_window import SIDEBAR_GAP
+
+    rows = [window.playset_list.visualItemRect(window.playset_list.item(r)) for r in (0, 1, 2)]
+    assert rows[0].height() == rows[1].height() + SIDEBAR_GAP
+    assert rows[1].height() == rows[2].height()
 
 
 def test_add_mods_from_the_full_list(window: MainWindow) -> None:
@@ -455,7 +472,7 @@ def test_save_and_load_a_file(
     window.save_file_action.trigger()
     window.load_file_action.trigger()
     # The local mod can't be shared; the rest comes back, under a new name.
-    assert sidebar(window)[-1] == "Main Playset (2) (3)"
+    assert sidebar(window)[2] == "Main Playset (2) (3)"
 
 
 def test_import_from_launcher(window: MainWindow) -> None:
