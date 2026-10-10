@@ -2043,9 +2043,11 @@ def test_a_built_playset_shows_the_empires_of_its_source(
     clashing.bind_empires([ELVES_EMPIRE], second.id)
     build(qtbot, clashing)
     built = built_playset(clashing)
-    clashing.playset_list.setCurrentRow(
-        next(i for i, p in enumerate(clashing.book.playsets, 1) if p.id == built.id)
-    )
+    sidebar_ids = [
+        clashing.playset_list.item(row).data(Qt.ItemDataRole.UserRole)
+        for row in range(clashing.playset_list.count())
+    ]
+    clashing.playset_list.setCurrentRow(sidebar_ids.index(built.id))
     assert clashing.selected_playset() == built
     assert clashing.empires_button.text() == "Empires (1)"
     plan = clashing._hide_empires_plan(built)
