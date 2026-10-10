@@ -45,7 +45,7 @@ def test_scanning_the_real_install_changes_nothing(tmp_path: Path) -> None:
 
 
 def test_your_empire_file_splits_and_joins_byte_for_byte() -> None:
-    """Hiding empires writes the file back from kept blocks, so they must join
+    """Play writes the game's empire file from kept blocks, so they must join
     back into exactly the file the game wrote."""
     steam_dirs = (
         tuple([Path(os.environ["STEAM_DIR"])] if "STEAM_DIR" in os.environ else [])
