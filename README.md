@@ -148,8 +148,8 @@ shows what changed. You can accept the update or keep your copy.
 ### Build one mod
 
 **Build** merges the whole playset, with its patch mod, into one mod, and
-makes a playset that plays just that mod. The build report shows where every
-file came from. A built mod is for your own use only. It contains other
+makes a playset that plays just that mod, and selects it, so playing the
+build is one click away. The build report shows where every file came from. A built mod is for your own use only. It contains other
 authors' work, so don't upload it.
 
 ### Saves

@@ -1054,13 +1054,44 @@ def test_build_a_playset_into_one_mod(qtbot: QtBot, clashing: MainWindow) -> Non
         "Alpha Interface",
     )
 
-    # A new playset plays just the built mod, which the scan found.
+    # A new playset plays just the built mod, which the scan found. It's selected,
+    # under the report (decision 95).
     assert clashing.book is not None and clashing.library is not None
     built = next(p for p in clashing.book.playsets if p.name == "Main Playset (built)")
     assert [e.name for e in built.entries] == ["Cold Steel build: Main Playset"]
     assert built.entries[0].key in {m.key for m in clashing.library.mods}
+    assert clashing.selected_playset() == built
+    assert "Main Playset (built) plays it" in clashing.statusBar().currentMessage()
+    clashing.playset_list.setCurrentRow(1)  # back to Main Playset
     assert clashing.report_action.isEnabled()
     assert clashing.delete_build_action.isEnabled()
+
+
+def test_a_rebuild_selects_the_built_playset_it_already_has(
+    qtbot: QtBot, clashing: MainWindow
+) -> None:
+    build(qtbot, clashing)
+    built = built_playset(clashing)
+    clashing.playset_list.setCurrentRow(1)  # back to Main Playset
+    build(qtbot, clashing)
+    assert clashing.book is not None
+    assert [p.name for p in clashing.book.playsets].count("Main Playset (built)") == 1
+    assert clashing.selected_playset() == built
+
+
+def test_a_playset_chosen_during_a_build_stays_selected(qtbot: QtBot, clashing: MainWindow) -> None:
+    with (
+        qtbot.waitSignal(clashing.library_shown, timeout=20_000),
+        qtbot.waitSignal(clashing.build_finished, timeout=20_000),
+    ):
+        clashing.build_action.trigger()
+        clashing.playset_list.setCurrentRow(0)  # All mods, while it builds
+    assert clashing.selected_playset() is None
+    assert clashing.statusBar().currentMessage() == (
+        "Built Main Playset. Select Main Playset (built) to play it"
+    )
+    report = clashing._build_dialog
+    assert report is not None and report.isVisible()
 
 
 def test_delete_a_built_mod(
@@ -1084,6 +1115,7 @@ def test_delete_a_built_mod(
     assert clashing.book is not None and clashing.bindings is not None
     built = next(p for p in clashing.book.playsets if p.name == "Main Playset (built)")
     clashing.bind_saves([UNE], built.id)
+    clashing.playset_list.setCurrentRow(1)  # back to Main Playset
 
     monkeypatch.setattr(clashing, "confirm", confirm)
     with qtbot.waitSignal(clashing.library_shown, timeout=20_000):
