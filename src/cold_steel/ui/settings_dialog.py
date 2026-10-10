@@ -81,7 +81,7 @@ class SettingsDialog(QDialog):
         self.cloud = QLabel(CLOUD_STATE[cloud_autosaves], wordWrap=True)
         self.cloud_hint = _hint(TURN_OFF_CLOUD)
         self.cloud_hint.setToolTip(TURN_OFF_DETAIL)
-        if game_found:  # the saves features are on only with them off (decision 91)
+        if game_found:  # saves and empires are on only with them off (decisions 91, 97)
             game.addRow("Cloud autosaves:", self.cloud)
             if cloud_autosaves is not False:
                 game.addRow("", self.cloud_hint)
