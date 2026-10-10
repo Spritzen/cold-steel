@@ -14,6 +14,7 @@ from PySide6.QtCore import (
     QFile,
     QModelIndex,
     QObject,
+    QPersistentModelIndex,
     QPoint,
     QRect,
     QSize,
@@ -31,6 +32,8 @@ from PySide6.QtGui import (
     QIcon,
     QImage,
     QKeySequence,
+    QPainter,
+    QPalette,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -149,7 +152,7 @@ from cold_steel.ui.build_dialog import BuildDialog
 from cold_steel.ui.conflicts_window import ConflictsWindow
 from cold_steel.ui.dlc_dialog import DlcDialog
 from cold_steel.ui.errors_dialog import ErrorsDialog
-from cold_steel.ui.full_text import line_count, show_full_text
+from cold_steel.ui.full_text import FullTextDelegate, line_count, show_full_text
 from cold_steel.ui.health_dialog import HealthDialog
 from cold_steel.ui.help import ABOUT, ShortcutsDialog, WelcomeDialog
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column, ModFilter, ModTableModel
@@ -178,6 +181,41 @@ TAGS_SHARE = 0.75
 WIDEST_HEALTH = "99 warnings"
 # Old copies named above the mod list; Conflicts lists the rest.
 OLD_COPIES_SHOWN = 3
+# The space under "All mods" in the sidebar, with a line across its middle.
+SIDEBAR_GAP = 9
+
+
+class SidebarDelegate(FullTextDelegate):
+    """The sidebar's rows, with a line under the first, "All mods", to set it
+    apart from the playsets below it."""
+
+    def sizeHint(  # noqa: N802 (Qt's name)
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
+        size = super().sizeHint(option, index)
+        return size + QSize(0, SIDEBAR_GAP) if index.row() == 0 else size
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
+        if index.row() != 0:
+            super().paint(painter, option, index)
+            return
+        item = QStyleOptionViewItem(option)
+        rect = option.rect
+        item.rect = rect.adjusted(0, 0, 0, -SIDEBAR_GAP)
+        super().paint(painter, item, index)
+        y = rect.bottom() - SIDEBAR_GAP // 2
+        painter.save()
+        # The text colour, faded: a theme's Mid colour can be near its background.
+        line = option.palette.color(QPalette.ColorRole.Text)
+        line.setAlphaF(0.3)
+        painter.setPen(line)
+        painter.drawLine(rect.left() + 4, y, rect.right() - 4, y)
+        painter.restore()
 
 
 class MainWindow(QMainWindow):
@@ -494,7 +532,8 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.clicked.connect(self._cell_clicked)
         self.table.verticalHeader().hide()
-        show_full_text(self.table, self.playset_list)
+        show_full_text(self.table)
+        self.playset_list.setItemDelegate(SidebarDelegate(self.playset_list))
         self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
         header = self.table.horizontalHeader()
         # Name and Tags share the room the other columns leave (_share_name_and_tags).
@@ -846,7 +885,8 @@ class MainWindow(QMainWindow):
         everything.setData(Qt.ItemDataRole.UserRole, None)
         self.playset_list.addItem(everything)
         selected = 0
-        for row, playset in enumerate(book.playsets if book else (), 1):
+        playsets = sorted(book.playsets if book else (), key=lambda p: (p.name.casefold(), p.id))
+        for row, playset in enumerate(playsets, 1):
             item = QListWidgetItem(self._playset_label(playset))
             item.setData(Qt.ItemDataRole.UserRole, playset.id)
             if book and playset.id == book.active:
@@ -1037,6 +1077,7 @@ class MainWindow(QMainWindow):
         name = self.ask_text("Rename playset", "New name:", playset.name)
         if name and name != playset.name:
             self._playset_changed(self.book.rename(playset.id, name))
+            self._fill_playsets(playset.id)  # back in name order
 
     def delete_playset(self) -> None:
         playset = self.selected_playset()
