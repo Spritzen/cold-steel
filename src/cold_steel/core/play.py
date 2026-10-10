@@ -21,7 +21,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cold_steel.core.empires import EmpireLists, put_in_game, take_back
+from cold_steel.core.empires import EmpireLists, FormatError, put_in_game, take_back
 from cold_steel.core.hide import hidden_dir, hide, restore
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Mod
@@ -117,9 +117,9 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
         empires = plan.empires
         try:
             put_in_game(empires.lists, empires.owner, empires.file, empires.state, backup_dir)
-        except OSError as error:
+        except (OSError, FormatError) as error:
             _put_back(plan)
-            raise PlayError(f"Couldn't give the game this playset's empires: {error}") from error
+            raise PlayError(f"Couldn't give the game this playset's empires. {error}") from error
     extra = (CONTINUE_ARG,) if plan.continue_from and plan.skip_menu else ()
     try:
         # Its own session, so closing Cold Steel doesn't close the game.

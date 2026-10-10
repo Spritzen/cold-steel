@@ -2,6 +2,7 @@
 
     empires/<playset id>.txt   one playset's empires, in the game's own format
     empires/loose.txt          empires that are in no playset's list yet
+    empires/lists.json         each list's empire file format, and the game it last played
     empires_in_game.json       whose list the game's empire file holds
 
 A list is the game's empire file for that playset: Play copies it into the
@@ -28,6 +29,24 @@ class EmpireState(msgspec.Struct):
     file: str = ""  # the game's empire file
     digest: int = 0  # xxhash of that file's bytes, when Cold Steel last wrote or read it
     running: bool = False  # Play put the list in, and the game hasn't closed since
+
+
+class ListInfo(msgspec.Struct, frozen=True):
+    """What a list's blocks were written by."""
+
+    # The empire file format they're in: "3.4", from user_empire_designs_v3.4.txt.
+    # "" until known. Play won't give a list to a game that uses another (decision 112).
+    format: str = ""
+    played: str = ""  # the game version that last played it: "v4.5.2"
+
+
+class ListsFile(msgspec.Struct):
+    version: int = STATE_VERSION
+    lists: dict[str, ListInfo] = msgspec.field(default_factory=dict)  # by owner
+
+
+def lists_file(root: Path) -> Path:
+    return root / "lists.json"
 
 
 def empires_dir() -> Path:

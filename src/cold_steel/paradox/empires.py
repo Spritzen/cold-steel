@@ -78,6 +78,13 @@ def empire_file(data_dir: Path) -> Path | None:
     return max(found)[1] if found else None
 
 
+def file_format(path: Path) -> str:
+    """The empire file format a file's name gives: "3.4" for
+    user_empire_designs_v3.4.txt. "" for any other name."""
+    match = _VERSION.search(path.name)
+    return match.group(1) if match else ""
+
+
 def split_empires(data: bytes) -> tuple[bytes, list[tuple[str, bytes]]]:
     """The bytes before the first block, and each top-level block with the
     gap after it, keyed by its name. Joined back in order, they're `data`."""

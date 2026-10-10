@@ -2077,6 +2077,33 @@ def test_a_built_playset_uses_the_list_of_its_source(
     ]
 
 
+def test_play_refuses_a_list_in_an_older_empire_file_format(
+    qtbot: QtBot,
+    with_empires: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cold_steel.paradox import processes
+
+    window = with_empires
+    lists = window.empire_lists
+    window._sync_empires()  # found in the v3.4 file
+    lists.add("p-second", lists.read("loose").empires[:1], replace=False, format="3.4")
+    new = sample_install.data_dir / "user_empire_designs_v3.5.txt"  # after a game update
+    new.write_bytes(UNE_BLOCK)
+    told: list[str] = []
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    window.library.game.exe.write_text("#!/bin/sh\n")  # type: ignore[union-attr]
+    window.playset_list.setCurrentRow(2)  # Second Playset
+    window.play_action.trigger()
+    assert "format of empire file 3.4, but the game now uses 3.5" in told[0]
+    assert new.read_bytes() == UNE_BLOCK  # nothing written
+
+    dialog = open_empires(qtbot, window)
+    assert "until they're converted" in dialog.summary.text()
+
+
 def test_species_names_picked_from_the_games_names_are_tidied() -> None:
     from cold_steel.ui.empires_dialog import species_name
 

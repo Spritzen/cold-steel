@@ -206,6 +206,8 @@ Like saves, **this needs the game's cloud autosaves turned off.**
   the ones you had before, and any made in a game started from the launcher.
   Import them into a playset, or delete them.
 - A built playset uses the list of the playset it was built from.
+- If a game update changes the empire file's format, Play won't give the game
+  a list in the old one, and says why.
 
 ### Share playsets
 

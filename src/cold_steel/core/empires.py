@@ -37,6 +37,7 @@ from cold_steel.paradox.empires import (
     EmpireInfo,
     EmpireReader,
     Use,
+    file_format,
     join_empires,
     parse_empires,
     write_empire_file,
@@ -45,11 +46,14 @@ from cold_steel.paradox.script import scan
 from cold_steel.store.empires import (
     LOOSE,
     EmpireState,
+    ListInfo,
+    ListsFile,
     list_file,
+    lists_file,
     load_state,
     save_state,
 )
-from cold_steel.store.files import load_json, write_atomic
+from cold_steel.store.files import load_json, save_json, write_atomic
 from cold_steel.store.playsets import Playset
 
 # The empire file's name when the game hasn't written one yet.
@@ -64,6 +68,10 @@ def list_owner(playset: Playset) -> str:
 
 def plays_a_build(playset: Playset) -> bool:
     return list_owner(playset) != playset.id
+
+
+class FormatError(Exception):
+    """A list in one empire file format can't go where another is used."""
 
 
 @dataclass(frozen=True)
@@ -106,10 +114,34 @@ class EmpireLists:
         backup_file(path, self.backup_dir)
         write_atomic(path, data)
 
-    def add(self, owner: str, empires: Sequence[Empire], *, replace: bool) -> Added:
+    def info(self, owner: str) -> ListInfo:
+        """A list's format and the game that last played it. Empty if not known."""
+        found = load_json(lists_file(self.root), ListsFile)
+        return found.lists.get(owner, ListInfo()) if found else ListInfo()
+
+    def set_info(self, owner: str, *, format: str = "", played: str = "") -> None:
+        """Record a list's format, or the game that played it. "" leaves one as it is."""
+        found = load_json(lists_file(self.root), ListsFile) or ListsFile()
+        old = found.lists.get(owner, ListInfo())
+        new = ListInfo(format or old.format, played or old.played)
+        if new != old:
+            found.lists[owner] = new
+            save_json(lists_file(self.root), found)
+
+    def add(
+        self, owner: str, empires: Sequence[Empire], *, replace: bool, format: str = ""
+    ) -> Added:
         """Copy empires into a list. One whose name is in it already replaces
-        that one, in its place, if `replace`; otherwise it's skipped."""
+        that one, in its place, if `replace`; otherwise it's skipped. `format`
+        is the empire file format they're in, if known: one that isn't the
+        list's raises FormatError, as their blocks may not mean the same there."""
         current = self.read(owner)
+        have_format = self.info(owner).format
+        if format and have_format and format != have_format and current.empires:
+            raise FormatError(
+                f"They're in the format of empire file {format}, and this list is in "
+                f"{have_format}'s."
+            )
         incoming = {e.name: e for e in empires}
         have = set(current.names)
         replaced = [n for n in current.names if n in incoming] if replace else []
@@ -117,6 +149,8 @@ class EmpireLists:
         added = [e for e in incoming.values() if e.name not in have]
         if added or replaced:
             self.write(owner, join_empires(current.head, [*texts, *(e.text for e in added)]))
+            if format and (not have_format or not current.empires):
+                self.set_info(owner, format=format)
         skipped = () if replace else tuple(n for n in incoming if n in have)
         return Added(tuple(e.name for e in added), tuple(replaced), skipped)
 
@@ -134,6 +168,7 @@ class EmpireLists:
         path = self.path(source)
         if path.exists():
             self.write(target, path.read_bytes())
+            self.set_info(target, format=self.info(source).format)
 
     def fingerprints(self) -> set[int]:
         """Every empire in every list, as a hash of its block that ignores spacing."""
@@ -313,7 +348,7 @@ def shelve_outside_changes(
     known = lists.fingerprints()
     found = [e for e in parse_empires(game_file, data).empires if digest(e.text) not in known]
     if found:
-        lists.add(LOOSE, found, replace=True)
+        lists.add(LOOSE, found, replace=True, format=file_format(game_file))
     save_state(msgspec.structs.replace(state, file=str(game_file), digest=_hash(data)), state_path)
     return tuple(e.name for e in found)
 
@@ -327,11 +362,31 @@ def put_in_game(
     Raises OSError; the game's file is then as it was."""
     shelve_outside_changes(lists, game_file, state_path)
     data = _read(lists.path(owner))
+    if problem := format_problem(lists, owner, game_file):
+        raise FormatError(problem)
     write_empire_file(game_file, data, backup_dir)
     # Written after the file, so a crash in between can't copy another list's
     # empires into this one: the next start sees an outside change instead.
     save_state(
         EmpireState(owner=owner, file=str(game_file), digest=_hash(data), running=True), state_path
+    )
+
+
+def format_problem(lists: EmpireLists, owner: str, game_file: Path) -> str:
+    """Why Play won't give the game this list, or "": the list's blocks are in
+    another empire file format than the game uses now (decision 112). An empty
+    list, or one whose format isn't known, is fine."""
+    have, now = lists.info(owner).format, file_format(game_file)
+    if not have or not now or have == now:
+        return ""
+    try:
+        if not lists.read(owner).empires:
+            return ""
+    except OSError:
+        return ""
+    return (
+        f"Its empires are in the format of empire file {have}, but the game now uses "
+        f"{now}'s. Cold Steel won't give them to it until they're converted."
     )
 
 
@@ -343,13 +398,13 @@ class TakenBack:
 
 
 def take_back(
-    lists: EmpireLists, state_path: Path, exists: Callable[[str], bool]
+    lists: EmpireLists, state_path: Path, exists: Callable[[str], bool], game: str = ""
 ) -> TakenBack | None:
     """After the game closed: copy the game's empire file back into the list
     Play put in, byte for byte, so what was made, changed or deleted in game is
     kept. If that playset was deleted meanwhile, its empires go to the loose
-    list. None when Play put nothing in. Raises OSError; the state then stays,
-    to try again."""
+    list. `game` is the game version that played it, to record. None when Play
+    put nothing in. Raises OSError; the state then stays, to try again."""
     state = load_state(state_path)
     if not state.running:
         return None
@@ -361,8 +416,9 @@ def take_back(
     if exists(owner):
         if data != _read(lists.path(owner)):
             lists.write(owner, data)
+        lists.set_info(owner, format=file_format(game_file), played=game)
     elif now.empires:
-        lists.add(LOOSE, now.empires, replace=True)
+        lists.add(LOOSE, now.empires, replace=True, format=file_format(game_file))
     save_state(EmpireState(owner=owner, file=str(game_file), digest=_hash(data)), state_path)
     return TakenBack(owner, tuple(changed_since(before, now)), not exists(owner))
 
@@ -417,7 +473,7 @@ def first_lists(
         for owner in homes or (LOOSE,):
             by_owner.setdefault(owner, []).append(empire)
     for owner, empires in by_owner.items():
-        lists.add(owner, empires, replace=True)
+        lists.add(owner, empires, replace=True, format=file_format(game_file))
     if old_bindings.exists():
         old_bindings.replace(old_bindings.with_name(f"{old_bindings.name}.old"))
     save_state(EmpireState(file=str(game_file), digest=_hash(data)), state_path)

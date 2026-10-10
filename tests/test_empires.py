@@ -7,6 +7,7 @@ import pytest
 
 from cold_steel.core.empires import (
     EmpireLists,
+    FormatError,
     build_catalog,
     changed_since,
     check_empire,
@@ -28,6 +29,7 @@ from cold_steel.paradox.empires import (
     Empire,
     EmpireReader,
     empire_file,
+    file_format,
     join_empires,
     parse_empires,
     read_empire_file,
@@ -333,6 +335,55 @@ def test_a_build_counts_as_every_mod_inside_it(tmp_path: Path) -> None:
         entries=(PlaysetEntry("local:cold_steel_build_main", True, "Cold Steel build: Main"),),
     )
     assert playset_mods(built, tmp_path) == {"local:cold_steel_build_main", ALPHA, BETA}
+
+
+# Empire file formats
+
+
+def test_a_files_format_comes_from_its_name() -> None:
+    assert file_format(Path("user_empire_designs_v3.4.txt")) == "3.4"
+    assert file_format(Path("user_empire_designs_v3.10.txt")) == "3.10"
+    assert file_format(Path("loose.txt")) == ""
+
+
+def test_each_list_records_its_format_and_the_game_that_played_it(
+    lists: EmpireLists, tmp_path: Path
+) -> None:
+    game = write_empires(tmp_path, ELVES)
+    state = tmp_path / "data/empires_in_game.json"
+    shelve_outside_changes(lists, game, state)
+    assert lists.info(LOOSE).format == "3.4"  # found in the game's v3.4 file
+    lists.add("a", empires(ELVES), replace=False, format="3.4")
+    put_in_game(lists, "a", game, state, tmp_path / "backups")
+    take_back(lists, state, lambda _: True, "v4.5.2")
+    assert (lists.info("a").format, lists.info("a").played) == ("3.4", "v4.5.2")
+    lists.copy_list("a", "copy")
+    assert lists.info("copy").format == "3.4"
+
+
+def test_empires_in_another_format_dont_mix_into_a_list(lists: EmpireLists) -> None:
+    lists.add("a", empires(ELVES), replace=False, format="3.4")
+    with pytest.raises(FormatError):
+        lists.add("a", empires(HUMANS), replace=False, format="3.5")
+    assert lists.read("a").names == ("Divine Elven Order",)
+    lists.add("b", empires(HUMANS), replace=False, format="3.5")  # an empty list takes any
+    assert lists.info("b").format == "3.5"
+
+
+def test_play_wont_give_the_game_a_list_in_an_older_format(
+    lists: EmpireLists, tmp_path: Path
+) -> None:
+    old = write_empires(tmp_path, ELVES)
+    state = tmp_path / "data/empires_in_game.json"
+    lists.add("a", empires(ELVES), replace=False, format="3.4")
+    new = tmp_path / "user_empire_designs_v3.5.txt"  # a game update started a new file
+    new.write_bytes(HUMANS)
+    assert empire_file(tmp_path) == new
+    with pytest.raises(FormatError, match="until they're converted"):
+        put_in_game(lists, "a", new, state, tmp_path / "backups")
+    assert new.read_bytes() == HUMANS and old.read_bytes() == ELVES
+    assert in_game(state) == ""
+    put_in_game(lists, "empty", new, state, tmp_path / "backups")  # nothing to convert
 
 
 # What changed in game

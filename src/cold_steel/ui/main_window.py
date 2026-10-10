@@ -79,10 +79,12 @@ from cold_steel.core.empires import (
     Added,
     Catalog,
     EmpireLists,
+    FormatError,
     build_catalog,
     check_empire,
     empire_needs,
     first_lists,
+    format_problem,
     game_file_for,
     in_game,
     list_owner,
@@ -1546,7 +1548,8 @@ class MainWindow(QMainWindow):
             return book is not None and book.get(playset_id) is not None
 
         try:
-            result = take_back(self.empire_lists, self._empires_state, exists)
+            game = self.library.game.version if self.library else ""
+            result = take_back(self.empire_lists, self._empires_state, exists, game)
         except OSError as error:
             self.tell(
                 "Empires",
@@ -2302,6 +2305,8 @@ class MainWindow(QMainWindow):
         if self._empire_source not in {o.owner for o in others}:
             self._empire_source = LOOSE
         source = book.get(owner) if owner != playset.id else None
+        game_file = self._game_empire_file()
+        problem = format_problem(self.empire_lists, owner, game_file) if game_file else ""
         dialog.set_state(
             playset.name,
             self._empire_rows(mine, playset),
@@ -2312,6 +2317,7 @@ class MainWindow(QMainWindow):
             checking=self._catalog is None,
             built_from=source.name if source else "",
             locked=in_game(self._empires_state) == owner,
+            format_problem=problem,
         )
 
     def _empire_source_chosen(self, owner: str) -> None:
@@ -2350,7 +2356,7 @@ class MainWindow(QMainWindow):
                 + "\n\nExport anyway?",
             ):
                 return
-        self._copy_empires(empires, target)
+        self._copy_empires(empires, list_owner(playset), target)
 
     def import_empires(self, names: Sequence[str], source: str) -> None:
         """Copy empires from another list into the selected playset's. From the
@@ -2362,7 +2368,7 @@ class MainWindow(QMainWindow):
         if self._locked(owner, "Import"):
             return
         empires = [e for e in self._read_list(source) if e.name in names]
-        result = self._copy_empires(empires, owner)
+        result = self._copy_empires(empires, source, owner)
         if result is not None and source == LOOSE:
             try:
                 self.empire_lists.remove(LOOSE, {*result.added, *result.replaced})
@@ -2370,9 +2376,9 @@ class MainWindow(QMainWindow):
                 self.tell("Import", f"They're copied, but still under {LOOSE_NAME}: {error}")
             self._show_empires(playset)
 
-    def _copy_empires(self, empires: Sequence[Empire], target: str) -> Added | None:
-        """Copy empires into a list. If it has some of the same name, ask whether
-        to replace them or skip these."""
+    def _copy_empires(self, empires: Sequence[Empire], source: str, target: str) -> Added | None:
+        """Copy empires from one list into another. If it has some of the same
+        name, ask whether to replace them or skip these."""
         name = self._list_name(target)
         have = set(self.empire_lists.read(target).names) if empires else set()
         same = [e.name for e in empires if e.name in have]
@@ -2382,10 +2388,11 @@ class MainWindow(QMainWindow):
             + "\n".join(f"  {n}" for n in same)
             + "\n\nReplace them? No keeps the ones there, and skips these.",
         )
+        fmt = self.empire_lists.info(source).format
         try:
-            result = self.empire_lists.add(target, empires, replace=replace)
-        except OSError as error:
-            self.tell("Empires", f"The empires weren't copied: {error}")
+            result = self.empire_lists.add(target, empires, replace=replace, format=fmt)
+        except (OSError, FormatError) as error:
+            self.tell("Empires", f"The empires weren't copied to {name}. {error}")
             return None
         copied = len(result.added) + len(result.replaced)
         skipped = f", {len(result.skipped)} skipped" if result.skipped else ""

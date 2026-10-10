@@ -66,7 +66,7 @@ class OtherList:
 
 def need_mods(need: Need, names: Mapping[str, str]) -> str:
     if not need.mods:
-        return f"{need.use[1]} (in no installed mod)"
+        return f"{need.use[1]} (not in the game or any installed mod)"
     return " or ".join(dict.fromkeys(names.get(m, m) for m in need.mods))
 
 
@@ -185,10 +185,12 @@ class EmpiresDialog(QDialog):
         checking: bool = False,
         built_from: str = "",
         locked: bool = False,
+        format_problem: str = "",
     ) -> None:
         """Show a playset's list, and the list `source` (one of `others`) to
         import from. `built_from` names the playset whose list a built playset
-        uses. `locked` while the game runs with this list: it can't change."""
+        uses. `locked` while the game runs with this list: it can't change.
+        `format_problem` says why Play won't give the list to the game."""
         self.others, self.source, self.locked = tuple(others), source, locked
         self.setWindowTitle(f"Empires of {title}")
         self._fill(self.listed, listed, mod_names)
@@ -217,7 +219,9 @@ class EmpiresDialog(QDialog):
         elif marked:
             verb = "is" if marked == 1 else "are"
             sentences.append(f"{marked} {verb} marked {WARNING}: the playset lacks mods they use.")
-        if locked:
+        if format_problem:
+            sentences.append(f"{WARNING} {format_problem}")
+        elif locked:
             sentences.append("The game is running with this list: it can change once it closes.")
         else:
             sentences.append("Play gives the game exactly these empires.")
