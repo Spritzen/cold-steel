@@ -1,6 +1,6 @@
 # Cold Steel
 
-A mod manager for **Stellaris** that runs natively on Linux (in all honesty fork the project and you can probably get Claude to rework for windows pretty easily; just ask it to plan it out with docs first and you can keep an eye on it).
+A mod manager for **Stellaris** that runs natively on Linux (in all honesty fork the project and rework for a different os, it's mostly the symlink and paths that's linux based).
 
 Cold Steel shows every mod you have installed and your playsets, all in one
 fast window. It shows which mods are broken and where mods clash, helps you
