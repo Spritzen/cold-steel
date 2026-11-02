@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from cold_steel.core.hide import hidden_dir, hidden_now, hide, keys_in_game, restore
+from cold_steel.core.hide import HiddenFile, hidden_dir, hidden_now, hide, keys_in_game, restore
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.saves import SaveScanner
 from cold_steel.paradox.game import find_game
 from cold_steel.paradox.save import autosaves_to_cloud, local_save_dir
-from cold_steel.store.files import save_json
+from cold_steel.store.files import load_json, save_json
 from conftest import SampleInstall, make_save, snapshot
 
 UNE = "unitednationsofearth_-15512622"
@@ -148,6 +148,8 @@ def test_saves_left_by_the_old_list_are_sorted_out(
     result = restore(record)
     assert result.waiting == (ELVES,) and result.stuck == result.new == ()
     assert set(scan(sample_install, record)) >= {ELVES, f"{ELVES}~2"}
+    saved = load_json(record, HiddenFile)
+    assert saved is not None and saved.version == 2  # written in the new layout, and says so
 
 
 def test_a_folder_is_never_moved_onto_another(dirs: tuple[Path, Path, Path]) -> None:

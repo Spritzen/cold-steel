@@ -229,7 +229,9 @@ def _settle(data: HiddenFile, save_dir: Path, hidden: Path) -> tuple[HiddenFile,
                 number += 1
             names[name] = f"{name}{SEPARATOR}{number}"
             used.add(names[name])
-    settled = msgspec.structs.replace(data, folders=sorted(stash), names=names)
+    settled = msgspec.structs.replace(
+        data, version=HIDDEN_VERSION, folders=sorted(stash), names=names
+    )
     return settled, {n: names.get(n, n) for n in game}
 
 
