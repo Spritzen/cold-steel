@@ -201,10 +201,9 @@ def test_the_list_is_written_before_anything_moves(
         assert hidden_now(record) == (UNE,)
         raise SystemExit  # Cold Steel stopped before the move
 
-    monkeypatch.setattr(Path, "rename", crash)
-    with pytest.raises(SystemExit):
+    with monkeypatch.context() as patch, pytest.raises(SystemExit):
+        patch.setattr(Path, "rename", crash)
         hide([UNE], [], saves, hidden, record)
-    monkeypatch.undo()
     # Next start: the folder never moved, so it's just taken off the list.
     assert restore(record).back == ()
     assert (saves / UNE).is_dir() and not record.exists()
@@ -225,10 +224,9 @@ def test_a_crash_while_bringing_a_save_back_keeps_each_key(
             raise SystemExit
         return rename(self, target)
 
-    monkeypatch.setattr(Path, "rename", crash)
-    with pytest.raises(SystemExit):
+    with monkeypatch.context() as patch, pytest.raises(SystemExit):
+        patch.setattr(Path, "rename", crash)
         hide([second], [ELVES], saves, hidden, record, "first")
-    monkeypatch.undo()
     assert not (saves / ELVES).exists()  # the second moved out, the first not in yet
     restore(record)  # the next start: the first comes back, under its own key
     assert (saves / ELVES / "2200.01.01.sav").is_file()
