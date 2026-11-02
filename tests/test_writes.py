@@ -123,9 +123,12 @@ def test_export_backs_up_the_database_first(
     assert dump(original) == before
 
     # The one-time original is never overwritten.
+    second = dump(db)
     export_playset(book, book.playsets[0], library, backups)
     assert dump(original) == before
-    assert len(backups_of(db, backups)) == 2
+    # Only the newest backup is kept: the database as it was just before.
+    (kept,) = backups_of(db, backups)
+    assert dump(kept) == second
 
 
 def test_export_replaces_the_launchers_copy(
@@ -237,8 +240,11 @@ def test_sync_makes_the_launchers_playsets_ours(
     assert len({p.id for p in launcher.playsets}) == 3
     # Each remembers its launcher playset, so the next sync replaces, not adds.
     assert [p.launcher_id for p in book.playsets] == [p.id for p in launcher.playsets]
+    synced = dump(db)
     sync_launcher(book, library, backups)
     assert read_launcher(db).playsets == launcher.playsets
+    (kept,) = backups_of(db, backups)  # the first sync's backup is gone
+    assert dump(kept) == synced
 
 
 def test_sync_keeps_the_launchers_active_one_if_it_stays(
