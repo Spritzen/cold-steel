@@ -2,9 +2,10 @@
 
     backup_file(db_path, backup_dir)   # raises OSError: then don't write
 
-Each backup is a dated copy in `backup_dir`, and the newest `KEEP` copies of
-each file are kept. The launcher database also gets a one-time original copy
-beside it, `launcher-v2.cold-steel-orig.sqlite`, which is never overwritten.
+Each backup is a dated copy in `backup_dir`, and the newest `keep` copies of
+each file are kept: `KEEP` unless the caller says otherwise. The launcher
+database also gets a one-time original copy beside it,
+`launcher-v2.cold-steel-orig.sqlite`, which is never overwritten.
 """
 
 import shutil

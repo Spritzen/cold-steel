@@ -1,7 +1,8 @@
 """Reads and writes playsets in the Paradox launcher's `launcher-v2.sqlite`.
 
 Reading opens the file with SQLite's `mode=ro`, so it can't change anything.
-Writing backs the file up first (decision 6). `write_playset` changes only
+Writing backs the file up first (decision 6), keeping only the newest backup
+(decision 21). `write_playset` changes only
 the one playset it was given; `replace_playsets` makes the launcher's list
 exactly the one it was given. Don't call either while the launcher is
 running: the launcher keeps its own copy of the data in memory.
@@ -17,6 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cold_steel.paradox.backup import backup_file, keep_original
+
+# Only the newest backup of the database is kept (decision 21). Each one is a
+# few hundred KB, and the one-time original copy stays beside it.
+KEEP_BACKUPS = 1
 
 # The columns we read. The launcher's layout changes between versions, so we
 # check for these on open and stop with a clear message if any are missing.
@@ -288,7 +293,7 @@ def _writing(
             conn.execute("BEGIN IMMEDIATE")
             try:
                 keep_original(db_path)
-                backup = backup_file(db_path, backup_dir)
+                backup = backup_file(db_path, backup_dir, KEEP_BACKUPS)
                 yield conn, columns, backup
                 conn.execute("COMMIT")
             except BaseException:
