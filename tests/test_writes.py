@@ -410,7 +410,7 @@ def test_play_hides_other_playsets_saves_before_starting_the_game(
             super().__init__(args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", Starting)
-    plan = replace(plan_play(book.playsets[0], library), hide=HidePlan((UNE,), record))
+    plan = replace(plan_play(book.playsets[0], library), hide=HidePlan((UNE,), (), record))
     play(plan, library.game, backups)
     assert hidden_at_start == [True]
     assert hidden_now(record) == (UNE,)

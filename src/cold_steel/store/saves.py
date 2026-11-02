@@ -1,7 +1,8 @@
 """Which playset each save belongs to, saved as `~/.local/share/cold-steel/saves.json`.
 
-Keyed by save folder (`commonwealthofman_1251622081`), which covers the save's
-files in the local folder and in Steam Cloud's (decision 80). Losing this file
+Keyed by save key: its folder's name (`commonwealthofman_1251622081`), or
+`<name>~2` when another save has that name (decision 129). It covers the
+save's files in the local folder, the hidden one and Steam Cloud's (decision 80). Losing this file
 loses nothing in game: only the links between saves and playsets.
 """
 
@@ -26,7 +27,7 @@ class Binding(msgspec.Struct, frozen=True):
 
 class BindingsFile(msgspec.Struct):
     version: int = BINDINGS_VERSION
-    saves: dict[str, Binding] = msgspec.field(default_factory=dict)  # by save folder
+    saves: dict[str, Binding] = msgspec.field(default_factory=dict)  # by save key
 
 
 def bindings_file() -> Path:

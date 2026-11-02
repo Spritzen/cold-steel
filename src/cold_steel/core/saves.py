@@ -5,10 +5,12 @@
     book.bind(["commonwealthofman_1251622081"], playset.id)
 
 A save is one folder, `<empire>_<number>`, in the local `save games/` folder,
-in Steam Cloud's, or in both (decision 80). Saves hidden while the game runs
-(core/hide.py) are read too, as local ones. Each `.sav` file in it is one save
-file of that save. A save file's `meta` is read once, then cached by size and
-timestamp (decision 9). Nothing outside our cache file is written.
+in Steam Cloud's, or in both (decision 80). Saves hidden from the game
+(core/hide.py) are read too, as local ones. Each save is known by its key: its
+folder's name, or `<name>~2` when another save has that name (decision 129).
+Each `.sav` file in it is one save file of that save. A save file's `meta` is
+read once, then cached by size and timestamp (decision 9). Nothing outside our
+cache file is written.
 """
 
 import os
@@ -19,7 +21,7 @@ from pathlib import Path
 
 import msgspec
 
-from cold_steel.core.hide import hidden_dir
+from cold_steel.core.hide import folder_of, hidden_dir, hidden_file, keys_in_game
 from cold_steel.core.jobs import JobContext
 from cold_steel.core.library import Library
 from cold_steel.core.mods import Stamp
@@ -70,8 +72,14 @@ class SaveFile:
 
 @dataclass(frozen=True)
 class Save:
-    folder: str  # "commonwealthofman_1251622081", the same in both places
+    folder: str  # "commonwealthofman_1251622081", as the game names it, the same in both places
     files: tuple[SaveFile, ...]  # newest first
+    # What bindings go by: the folder's name, or "<name>~2" when another save has it.
+    key: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.key:
+            object.__setattr__(self, "key", self.folder)
 
     @property
     def newest(self) -> SaveFile:
@@ -99,48 +107,70 @@ class SaveScanner:
     local_dir: Path
     cloud_dirs: tuple[Path, ...]
     cache_file: Path
-    hidden_dir: Path | None = None  # saves of other playsets, hidden while the game runs
+    hidden_dir: Path | None = None  # saves of other playsets, hidden from the game
+    record: Path | None = None  # hidden.json: the keys of saves whose name another has
 
     @classmethod
-    def for_game(cls, game: Game, cache_file: Path | None = None) -> SaveScanner:
+    def for_game(
+        cls, game: Game, cache_file: Path | None = None, record: Path | None = None
+    ) -> SaveScanner:
         return cls(
             local_save_dir(game.data_dir),
             cloud_save_dirs(game.steam_dir),
             cache_file or paths.cache_dir() / "saves.msgpack",
             hidden_dir(game.data_dir),
+            record or hidden_file(),
         )
 
     def __call__(self, ctx: JobContext) -> tuple[Save, ...]:
         """Every save, the most recently written first."""
         ctx.progress(0, 0, "Finding saves")
-        found = [(path, stamp, False) for path, stamp in _list_files(self.local_dir)]
+        keys: dict[str, str] = {}
+        if self.hidden_dir is not None and self.record is not None:
+            keys = keys_in_game(self.record, self.local_dir, self.hidden_dir)
+        # (path, stamp, cloud, key). Cloud files go with the local folder of
+        # their name, as the game shows them.
+        found = [
+            (path, stamp, False, keys.get(path.parent.name, path.parent.name))
+            for path, stamp in _list_files(self.local_dir)
+        ]
         if self.hidden_dir is not None:
-            found += [(path, stamp, False) for path, stamp in _list_files(self.hidden_dir)]
+            found += [
+                (path, stamp, False, path.parent.name)
+                for path, stamp in _list_files(self.hidden_dir)
+            ]
         for folder in self.cloud_dirs:
-            found += [(path, stamp, True) for path, stamp in _list_files(folder)]
+            found += [
+                (path, stamp, True, keys.get(path.parent.name, path.parent.name))
+                for path, stamp in _list_files(folder)
+            ]
 
         cache = load_msgpack(self.cache_file, SaveCache)
         if cache is None or cache.version != CACHE_VERSION:
             cache = SaveCache()
         entries: dict[str, CachedFile] = {}
-        by_folder: dict[str, list[SaveFile]] = {}
-        for done, (path, stamp, cloud) in enumerate(found):
+        by_key: dict[str, list[SaveFile]] = {}
+        for done, (path, stamp, cloud, key) in enumerate(found):
             ctx.progress(done, len(found), "Reading saves")
             entry = cache.files.get(str(path))
             if entry is None or entry.stamp != stamp:
                 entry = _read(path, stamp)
             entries[str(path)] = entry
             file = SaveFile(path, cloud, stamp[1], entry.info, entry.problem)
-            by_folder.setdefault(path.parent.name, []).append(file)
+            by_key.setdefault(key, []).append(file)
 
         if entries != cache.files:
             save_msgpack(self.cache_file, SaveCache(files=entries))
 
         saves = [
-            Save(folder, tuple(sorted(files, key=lambda f: (f.saved, f.name), reverse=True)))
-            for folder, files in by_folder.items()
+            Save(
+                folder_of(key),
+                tuple(sorted(files, key=lambda f: (f.saved, f.name), reverse=True)),
+                key,
+            )
+            for key, files in by_key.items()
         ]
-        return tuple(sorted(saves, key=lambda s: (s.saved, s.folder), reverse=True))
+        return tuple(sorted(saves, key=lambda s: (s.saved, s.key), reverse=True))
 
 
 def _list_files(base: Path) -> list[tuple[Path, Stamp]]:
@@ -170,7 +200,7 @@ def _read(path: Path, stamp: Stamp) -> CachedFile:
 
 
 class BindingBook:
-    """Which playset each save belongs to, by save folder. Every change is saved at once."""
+    """Which playset each save belongs to, by save key. Every change is saved at once."""
 
     def __init__(self, data: BindingsFile, path: Path) -> None:
         self._data = data
@@ -191,12 +221,12 @@ class BindingBook:
         book.problems = problems
         return book
 
-    def get(self, folder: str) -> Binding | None:
-        return self._data.saves.get(folder)
+    def get(self, key: str) -> Binding | None:
+        return self._data.saves.get(key)
 
-    def playset_of(self, folder: str) -> str:
+    def playset_of(self, key: str) -> str:
         """The id of the playset the save belongs to, or "" if none."""
-        binding = self._data.saves.get(folder)
+        binding = self._data.saves.get(key)
         return binding.playset if binding else ""
 
     def saves_of(self, playset_id: str) -> set[str]:
@@ -211,33 +241,33 @@ class BindingBook:
             if b.playset in playset_ids and b.playset != playset_id
         }
 
-    def bind(self, folders: Iterable[str], playset_id: str) -> None:
+    def bind(self, keys: Iterable[str], playset_id: str) -> None:
         """Bind saves to a playset, or move them to it from another."""
         bound = datetime.now().strftime("%Y-%m-%d %H:%M")
-        for folder in folders:
-            self._data.saves[folder] = Binding(playset=playset_id, bound=bound)
+        for key in keys:
+            self._data.saves[key] = Binding(playset=playset_id, bound=bound)
         self._save()
 
-    def keep(self, folders: Iterable[str], build: str) -> None:
+    def keep(self, keys: Iterable[str], build: str) -> None:
         """Keep saves with their built playset's new build (BuildRecord.built),
         so they aren't marked as made with an older build."""
-        for folder in folders:
-            if binding := self._data.saves.get(folder):
-                self._data.saves[folder] = msgspec.structs.replace(binding, build=build)
+        for key in keys:
+            if binding := self._data.saves.get(key):
+                self._data.saves[key] = msgspec.structs.replace(binding, build=build)
         self._save()
 
-    def unbind(self, folders: Iterable[str]) -> None:
+    def unbind(self, keys: Iterable[str]) -> None:
         """Unbind saves by choice. They're never suggested for a playset again."""
-        for folder in folders:
-            self._data.saves[folder] = Binding()
+        for key in keys:
+            self._data.saves[key] = Binding()
         self._save()
 
     def forget_playset(self, playset_id: str) -> int:
         """The playset is gone: its saves belong to none, and may be suggested
         for another. How many saves it had."""
         gone = self.saves_of(playset_id)
-        for folder in gone:
-            del self._data.saves[folder]
+        for key in gone:
+            del self._data.saves[key]
         if gone:
             self._save()
         return len(gone)
@@ -248,14 +278,14 @@ class BindingBook:
 
 def bound_saves(saves: Iterable[Save], book: BindingBook, playset_id: str) -> list[Save]:
     """The saves bound to a playset, newest first."""
-    return [s for s in saves if book.playset_of(s.folder) == playset_id]
+    return [s for s in saves if book.playset_of(s.key) == playset_id]
 
 
 def unbound_saves(
     saves: Iterable[Save], book: BindingBook, playset_ids: Collection[str]
 ) -> list[Save]:
     """The saves bound to no playset that exists, newest first."""
-    return [s for s in saves if book.playset_of(s.folder) not in playset_ids]
+    return [s for s in saves if book.playset_of(s.key) not in playset_ids]
 
 
 # Binding on their own, and how a save compares with its playset now
@@ -271,13 +301,13 @@ def played_mods(playset: Playset, library: Library) -> tuple[str, ...]:
 def played_since(saves: Iterable[Save], book: BindingBook, since: int) -> list[str]:
     """Saves with a file written since `since` (nanoseconds) and no binding yet.
     After Play, these are bound to the playset that was played (decision 82)."""
-    return [s.folder for s in saves if s.saved >= since and book.get(s.folder) is None]
+    return [s.key for s in saves if s.saved >= since and book.get(s.key) is None]
 
 
 def suggest(
     saves: Iterable[Save], book: BindingBook, played: Mapping[str, tuple[str, ...]]
 ) -> dict[str, str]:
-    """Save folder -> the id of the one playset whose mods, as played (`played`,
+    """Save key -> the id of the one playset whose mods, as played (`played`,
     by playset id), are exactly its newest file's. Only for saves never bound,
     or bound to a playset that's gone. When several playsets match, as copies
     of one playset do, none is suggested."""
@@ -286,13 +316,13 @@ def suggest(
         by_mods.setdefault(mods, []).append(playset_id)
     found: dict[str, str] = {}
     for save in saves:
-        binding = book.get(save.folder)
+        binding = book.get(save.key)
         if binding is not None and (not binding.playset or binding.playset in played):
             continue  # unbound by choice, or bound
         info = save.info
         matches = by_mods.get(info.mods, []) if info else []
         if len(matches) == 1:
-            found[save.folder] = matches[0]
+            found[save.key] = matches[0]
     return found
 
 

@@ -23,7 +23,7 @@ from cold_steel.core.saves import Save, SaveCheck, SaveFile
 from cold_steel.store.playsets import Playset
 from cold_steel.ui.full_text import show_full_text
 
-FOLDER_ROLE = Qt.ItemDataRole.UserRole
+KEY_ROLE = Qt.ItemDataRole.UserRole
 COLUMNS = ["Save", "In game", "Saved", "Version", "Where"]
 # The last column: how a bound save compares with its playset, or which
 # playset an unbound one is suggested for.
@@ -62,11 +62,11 @@ def _where(files: Sequence[SaveFile]) -> str:
 
 
 class SavesDialog(QDialog):
-    # Bind these saves (folders) to a playset (id), or move them to it.
+    # Bind these saves (keys) to a playset (id), or move them to it.
     bind_requested = Signal(tuple, str)
-    # Unbind these saves (folders). They're not suggested for a playset again.
+    # Unbind these saves (keys). They're not suggested for a playset again.
     unbind_requested = Signal(tuple)
-    # Play the playset and open a save (folder) at its newest file.
+    # Play the playset and open a save (key) at its newest file.
     continue_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -74,7 +74,7 @@ class SavesDialog(QDialog):
         self.resize(820, 560)
         self.playset: Playset | None = None
         self.playsets: tuple[Playset, ...] = ()
-        self.suggested: dict[str, Playset] = {}  # by save folder
+        self.suggested: dict[str, Playset] = {}  # by save key
 
         self.summary = QLabel(wordWrap=True)
         self.bound = self._tree(STATE)
@@ -137,21 +137,21 @@ class SavesDialog(QDialog):
     ) -> None:
         """Show a playset's saves. `bound` is None while the saves are still being read.
         `checks` compares each bound save with the playset, and `suggested` names
-        the playset an unbound save's mods match; both are by save folder."""
+        the playset an unbound save's mods match; both are by save key."""
         self.playset, self.playsets = playset, tuple(playsets)
         checks, self.suggested = checks or {}, dict(suggested or {})
         self.setWindowTitle(f"Saves of {playset.name}")
-        self._fill(self.bound, bound or (), lambda save: _state(checks.get(save.folder)))
+        self._fill(self.bound, bound or (), lambda save: _state(checks.get(save.key)))
         self._fill(
             self.unbound,
             unbound,
-            lambda save: (p.name, "") if (p := self.suggested.get(save.folder)) else ("", ""),
+            lambda save: (p.name, "") if (p := self.suggested.get(save.key)) else ("", ""),
         )
         self.suggested_button.setEnabled(bool(self.suggested))
         if bound is None:
             self.summary.setText("Looking for saves…")
         elif bound:
-            shown = {s.folder for s in bound}
+            shown = {s.key for s in bound}
             differ = sum(bool(c.marks) for f, c in checks.items() if f in shown)
             self.summary.setText(
                 f"{len(bound)} save(s) belong to this playset, newest first. "
@@ -182,9 +182,9 @@ class SavesDialog(QDialog):
     ) -> None:
         """One row per save, opening into its files. `last` gives the last column's
         text and tooltip."""
-        selected = {i.data(0, FOLDER_ROLE) for i in tree.selectedItems()}
+        selected = {i.data(0, KEY_ROLE) for i in tree.selectedItems()}
         items = [tree.topLevelItem(row) for row in range(tree.topLevelItemCount())]
-        expanded = {i.data(0, FOLDER_ROLE) for i in items if i is not None and i.isExpanded()}
+        expanded = {i.data(0, KEY_ROLE) for i in items if i is not None and i.isExpanded()}
         tree.clear()
         for save in saves:
             newest = save.newest
@@ -201,7 +201,7 @@ class SavesDialog(QDialog):
                 ],
             )
             item.setToolTip(len(COLUMNS), tip)
-            item.setData(0, FOLDER_ROLE, save.folder)
+            item.setData(0, KEY_ROLE, save.key)
             where = f"Folder: {save.folder}" if save.info else "None of its files could be read"
             item.setToolTip(0, f"{save.empire}\n{where}")
             for file in save.files:
@@ -216,28 +216,28 @@ class SavesDialog(QDialog):
                     ],
                 )
                 child.setToolTip(0, f"{file.path}\n{file.problem}".strip())
-                child.setData(0, FOLDER_ROLE, save.folder)
+                child.setData(0, KEY_ROLE, save.key)
                 child.setFlags(child.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            item.setSelected(save.folder in selected)
-            item.setExpanded(save.folder in expanded)
+            item.setSelected(save.key in selected)
+            item.setExpanded(save.key in expanded)
 
-    def _folders(self, tree: QTreeWidget) -> tuple[str, ...]:
-        return tuple(i.data(0, FOLDER_ROLE) for i in tree.selectedItems())
+    def _keys(self, tree: QTreeWidget) -> tuple[str, ...]:
+        return tuple(i.data(0, KEY_ROLE) for i in tree.selectedItems())
 
     def _unbound_selected(self) -> None:
-        self.bind_button.setEnabled(self.playset is not None and bool(self._folders(self.unbound)))
+        self.bind_button.setEnabled(self.playset is not None and bool(self._keys(self.unbound)))
 
     def _bind_selected(self) -> None:
-        folders = self._folders(self.unbound)
-        if self.playset is not None and folders:
-            self.bind_requested.emit(folders, self.playset.id)
+        keys = self._keys(self.unbound)
+        if self.playset is not None and keys:
+            self.bind_requested.emit(keys, self.playset.id)
 
     def _bind_suggested(self) -> None:
         by_playset: dict[str, list[str]] = {}
-        for folder, playset in self.suggested.items():
-            by_playset.setdefault(playset.id, []).append(folder)
-        for playset_id, folders in by_playset.items():
-            self.bind_requested.emit(tuple(folders), playset_id)
+        for key, playset in self.suggested.items():
+            by_playset.setdefault(playset.id, []).append(key)
+        for playset_id, keys in by_playset.items():
+            self.bind_requested.emit(tuple(keys), playset_id)
 
     def _menu(self, tree: QTreeWidget, pos: QPoint) -> None:
         item = tree.itemAt(pos)
@@ -246,20 +246,20 @@ class SavesDialog(QDialog):
         if item is not None and not item.isSelected():
             tree.clearSelection()
             item.setSelected(True)
-        folders = self._folders(tree)
-        if not folders or self.playset is None:
+        keys = self._keys(tree)
+        if not keys or self.playset is None:
             return
-        menu = self.menu_for(tree, folders)
+        menu = self.menu_for(tree, keys)
         menu.exec(tree.viewport().mapToGlobal(pos))
 
-    def menu_for(self, tree: QTreeWidget, folders: tuple[str, ...]) -> QMenu:
+    def menu_for(self, tree: QTreeWidget, keys: tuple[str, ...]) -> QMenu:
         """The right-click menu for these saves. Kept apart so tests can use it."""
         menu = QMenu(self)
         bound = tree is self.bound
-        if bound and len(folders) == 1:
+        if bound and len(keys) == 1:
             act = menu.addAction("Continue")
             act.setToolTip("Play this playset and open this save at its newest file")
-            act.triggered.connect(lambda: self.continue_requested.emit(folders[0]))
+            act.triggered.connect(lambda: self.continue_requested.emit(keys[0]))
             menu.addSeparator()
         target = menu.addMenu("Move to playset" if bound else "Bind to playset")
         for playset in self.playsets:
@@ -267,11 +267,11 @@ class SavesDialog(QDialog):
                 continue
             act = target.addAction(playset.name)
             act.triggered.connect(
-                lambda _=False, pid=playset.id: self.bind_requested.emit(folders, pid)
+                lambda _=False, pid=playset.id: self.bind_requested.emit(keys, pid)
             )
         target.setEnabled(not target.isEmpty())
         if bound:
             unbind = menu.addAction("Unbind")
             unbind.setToolTip("The save stays on disk. It isn't suggested for a playset again")
-            unbind.triggered.connect(lambda: self.unbind_requested.emit(folders))
+            unbind.triggered.connect(lambda: self.unbind_requested.emit(keys))
         return menu
