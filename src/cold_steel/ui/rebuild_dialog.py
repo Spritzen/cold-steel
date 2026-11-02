@@ -20,12 +20,12 @@ from cold_steel.core.saves import Save
 from cold_steel.ui.full_text import show_full_text
 from cold_steel.ui.saves_dialog import saved_text
 
-FOLDER_ROLE = Qt.ItemDataRole.UserRole
+KEY_ROLE = Qt.ItemDataRole.UserRole
 
 
 @dataclass(frozen=True)
 class RebuildChoice:
-    asked: frozenset[str]  # the save folders the question listed
+    asked: frozenset[str]  # the saves the question listed, by key
     keep: frozenset[str]  # those kept with the rebuilt playset
     trash: bool  # move the local files of the saves not kept to the trash
 
@@ -88,7 +88,7 @@ class RebuildDialog(QDialog):
                 self.tree,
                 ["", save.empire, info.date if info else "", saved_text(save.saved)],
             )
-            item.setData(0, FOLDER_ROLE, save.folder)
+            item.setData(0, KEY_ROLE, save.key)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(0, Qt.CheckState.Checked)
         self.tree.itemChanged.connect(self._update_trash_note)
@@ -124,25 +124,23 @@ class RebuildDialog(QDialog):
 
     def kept(self) -> frozenset[str]:
         return frozenset(
-            i.data(0, FOLDER_ROLE)
-            for i in self._items()
-            if i.checkState(0) == Qt.CheckState.Checked
+            i.data(0, KEY_ROLE) for i in self._items() if i.checkState(0) == Qt.CheckState.Checked
         )
 
-    def set_kept(self, folder: str, kept: bool) -> None:
+    def set_kept(self, key: str, kept: bool) -> None:
         state = Qt.CheckState.Checked if kept else Qt.CheckState.Unchecked
         for item in self._items():
-            if item.data(0, FOLDER_ROLE) == folder:
+            if item.data(0, KEY_ROLE) == key:
                 item.setCheckState(0, state)
 
     def choice(self) -> RebuildChoice:
         trash = self.trash_box.isChecked() and self.trash_box.isEnabled()
-        asked = frozenset(s.folder for s in self.saves)
+        asked = frozenset(s.key for s in self.saves)
         return RebuildChoice(asked, self.kept(), trash)
 
     def _update_trash_note(self) -> None:
         kept = self.kept()
-        dropped = [s for s in self.saves if s.folder not in kept]
+        dropped = [s for s in self.saves if s.key not in kept]
         if self._game_running:
             self.trash_note.setText("Close Stellaris to move save files to the trash.")
             return

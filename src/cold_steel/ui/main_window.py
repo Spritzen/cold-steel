@@ -112,7 +112,7 @@ from cold_steel.core.empires import (
 )
 from cold_steel.core.errors import ErrorReader, ErrorReport
 from cold_steel.core.health import Health, HealthChecker, status
-from cold_steel.core.hide import hidden_file, hidden_now, restore
+from cold_steel.core.hide import hidden_file, hidden_now, restore, restore_pending
 from cold_steel.core.index import GAME, Index, Indexer
 from cold_steel.core.jobs import Job, JobContext
 from cold_steel.core.library import Library
@@ -181,7 +181,7 @@ from cold_steel.paradox.continue_game import ContinueGame
 from cold_steel.paradox.empires import Empire, EmpireFile, empire_file, file_format
 from cold_steel.paradox.game import Game, GameNotFound
 from cold_steel.paradox.launcher_db import LauncherDbError
-from cold_steel.paradox.save import autosaves_to_cloud, local_save_dir
+from cold_steel.paradox.save import autosaves_to_cloud
 from cold_steel.store import paths
 from cold_steel.store.empires import (
     LOOSE,
@@ -371,6 +371,8 @@ class MainWindow(QMainWindow):
         # since are bound to it once the game closes.
         self._played: tuple[str, int] | None = None
         self._bind_played = False  # the next save scan does that binding
+        # Saves the game made while Play had saves hidden: (playset id, keys).
+        self._appeared: tuple[str, tuple[str, ...]] | None = None
         # hidden.json: the saves of other playsets that Play hid from the game.
         self._hidden_path = hidden_path or hidden_file()
         # Each playset's empire list. On with the saves features (decision 97).
@@ -1523,18 +1525,18 @@ class MainWindow(QMainWindow):
     def play(self) -> None:
         self._play(None)
 
-    def continue_playset(self, folder: str = "") -> None:
+    def continue_playset(self, key: str = "") -> None:
         """Play the selected playset and open one of its saves at its newest
         file, skipping the game's main menu. By default its newest save."""
         playset, bindings = self.selected_playset(), self.bindings
         if playset is None or bindings is None or not self.saves_on:
             return
         bound = bound_saves(self.saves or (), bindings, playset.id)
-        save = next((s for s in bound if s.folder == folder), None) if folder else None
+        save = next((s for s in bound if s.key == key), None) if key else None
         save = save or (bound[0] if bound else None)
         if save is None:
             return
-        check = self._check_saves(playset, [save]).get(save.folder)
+        check = self._check_saves(playset, [save]).get(save.key)
         if (
             check
             and check.marks
@@ -1586,7 +1588,7 @@ class MainWindow(QMainWindow):
             if skip_menu and continue_from
             else ""
         )
-        hidden = len(hidden_now(self._hidden_path)) if plan.hide else 0
+        hidden = len(set(hidden_now(self._hidden_path)) & set(plan.hide.away)) if plan.hide else 0
         hid = f". {hidden} save(s) of other playsets are hidden until it closes" if hidden else ""
         self.statusBar().showMessage(f"Stellaris is starting with {playset.name}{at}{hid}")
         if hasattr(process, "poll"):
@@ -1594,12 +1596,13 @@ class MainWindow(QMainWindow):
             self._game_timer.start()
 
     def _hide_plan(self, playset: Playset) -> HidePlan | None:
-        """The saves of other playsets to hide from the game, when its autosaves
-        stay local (decision 91)."""
+        """The saves of other playsets to hide from the game, and the playset's
+        own to bring back, when its autosaves stay local (decision 91)."""
         if self.book is None or self.bindings is None or not self.saves_on:
             return None
         others = self.bindings.bound_elsewhere(playset.id, {p.id for p in self.book.playsets})
-        return HidePlan(tuple(sorted(others)), self._hidden_path) if others else None
+        own = self.bindings.saves_of(playset.id)
+        return HidePlan(tuple(sorted(others)), tuple(sorted(own)), self._hidden_path, playset.id)
 
     def _empires_plan(self, playset: Playset) -> EmpiresPlan | None:
         """The playset's empire list, to give the game as its empire file, when
@@ -1613,7 +1616,7 @@ class MainWindow(QMainWindow):
     def _put_back_hidden(self) -> None:
         """Put back the saves Play hid, and copy the game's empire file back into
         the list Play gave it, once the game isn't running."""
-        waiting = hidden_now(self._hidden_path) or in_game(self._empires_state)
+        waiting = restore_pending(self._hidden_path) or in_game(self._empires_state)
         if waiting and processes.running(processes.GAME):
             # Started before Cold Steel was, or by an earlier run of it: wait for it to close.
             self._restore_waiting = True
@@ -1653,17 +1656,23 @@ class MainWindow(QMainWindow):
         self._lists_changed()
 
     def _put_back_saves(self) -> None:
-        """Move back the saves Play hid. The game isn't running."""
-        if not hidden_now(self._hidden_path):
+        """Move back the saves Play hid, where their name is free. The game
+        isn't running. A save of the same name as one in save games waits, hidden,
+        for its playset to be played: that needs no word (decision 129)."""
+        if not restore_pending(self._hidden_path):
             return
         result = restore(self._hidden_path)
+        if result.new and result.playset:
+            # Made by the game Play started: bound to its playset by the next scan.
+            self._appeared = (result.playset, result.new)
+            self._bind_played = True
         if result.stuck:
             listed = "\n".join(f"  {f}" for f in result.stuck)
             self.tell(
                 "Hidden saves",
-                "These saves are still hidden, because a save folder of the same name "
-                f"is back in save games:\n{listed}\n\nThey're in {result.hidden_dir}. "
-                "Move them back by hand once you've checked which copy to keep.",
+                f"These saves couldn't be moved back into save games:\n{listed}\n\n"
+                f"They're in {result.hidden_dir}. Cold Steel tries again when it next "
+                "starts, and when the game closes.",
             )
 
     # Errors from the game
@@ -2089,7 +2098,7 @@ class MainWindow(QMainWindow):
             return
         if self._saves_task is not None:
             self._saves_task.cancel()
-        task = self.tasks.start(SaveScanner.for_game(self.library.game))
+        task = self.tasks.start(SaveScanner.for_game(self.library.game, record=self._hidden_path))
         self._saves_task = task
         task.succeeded.connect(lambda saves: self._saves_read(saves, task))
         task.failed.connect(lambda error: self._saves_failed(error, task))
@@ -2121,18 +2130,28 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Build cancelled: another playset was chosen")
 
     def _bind_new_saves(self, saves: tuple[Save, ...]) -> None:
-        """Bind the saves written since Play to the playset it played (decision 82)."""
+        """Bind the saves written since Play to the playset it played (decision 82).
+        So are the saves the game made while Play had saves hidden, even if their
+        key was bound before, to a save that's gone (decision 129)."""
         self._bind_played = False
+        appeared, self._appeared = self._appeared, None
         played, book, bindings = self._played, self.book, self.bindings
-        if played is None or book is None or bindings is None:
+        if book is None or bindings is None:
             return
-        playset = book.get(played[0])
-        new = played_since(saves, bindings, played[1])
-        if playset is None or not new:
-            return
-        bindings.bind(new, playset.id)
-        names = ", ".join(s.empire for s in saves if s.folder in new)
-        self.statusBar().showMessage(f"New save(s) bound to {playset.name}: {names}")
+        found = {s.key for s in saves}
+        new: dict[str, list[str]] = {}
+        if played is not None:
+            new[played[0]] = played_since(saves, bindings, played[1])
+        if appeared is not None:
+            keys = new.setdefault(appeared[0], [])
+            keys += [k for k in appeared[1] if k in found and k not in keys]
+        for playset_id, keys in new.items():
+            playset = book.get(playset_id)
+            if playset is None or not keys:
+                continue
+            bindings.bind(keys, playset.id)
+            names = ", ".join(s.empire for s in saves if s.key in keys)
+            self.statusBar().showMessage(f"New save(s) bound to {playset.name}: {names}")
 
     def _read_saves_setting(self) -> bool:
         """Turn the saves features on or off from the game's settings.txt: on
@@ -2193,7 +2212,7 @@ class MainWindow(QMainWindow):
             else "This playset has no saves yet"
         )
         checks = self._check_saves(playset, bound) if playset and library else {}
-        differ = [s.empire for s in bound if checks[s.folder].mods_differ]
+        differ = [s.empire for s in bound if checks[s.key].mods_differ]
         if differ:
             self.saves_label.setText(
                 f"{len(differ)} save(s) of this playset were made with other mods than it "
@@ -2232,9 +2251,9 @@ class MainWindow(QMainWindow):
                 patch_written = (self._patch_dir / playset.id / "descriptor.mod").stat().st_mtime_ns
         checks: dict[str, SaveCheck] = {}
         for save in saves:
-            binding = bindings.get(save.folder)
+            binding = bindings.get(save.key)
             kept = binding is not None and binding.build == build
-            checks[save.folder] = check_save(
+            checks[save.key] = check_save(
                 save,
                 mods,
                 library.game.version,
@@ -2243,22 +2262,22 @@ class MainWindow(QMainWindow):
             )
         return checks
 
-    def bind_saves(self, folders: Sequence[str], playset_id: str) -> None:
+    def bind_saves(self, keys: Sequence[str], playset_id: str) -> None:
         """Bind saves to a playset, or move them to it."""
-        if self.bindings is None or self.book is None or not folders:
+        if self.bindings is None or self.book is None or not keys:
             return
         playset = self.book.get(playset_id)
         if playset is None:
             return
-        self.bindings.bind(folders, playset_id)
-        self.statusBar().showMessage(f"{len(folders)} save(s) now belong to {playset.name}")
+        self.bindings.bind(keys, playset_id)
+        self.statusBar().showMessage(f"{len(keys)} save(s) now belong to {playset.name}")
         self._show_saves(self.selected_playset())
 
-    def unbind_saves(self, folders: Sequence[str]) -> None:
-        if self.bindings is None or not folders:
+    def unbind_saves(self, keys: Sequence[str]) -> None:
+        if self.bindings is None or not keys:
             return
-        self.bindings.unbind(folders)
-        self.statusBar().showMessage(f"Unbound {len(folders)} save(s). Their files stay")
+        self.bindings.unbind(keys)
+        self.statusBar().showMessage(f"Unbound {len(keys)} save(s). Their files stay")
         self._show_saves(self.selected_playset())
 
     def _saves_unbound_text(self, playset: Playset) -> str:
@@ -2973,8 +2992,8 @@ class MainWindow(QMainWindow):
         built = self._built_playset(playset)
         if library is None or bindings is None or built is None or not self.saves_on:
             return True, None
-        folders = bindings.saves_of(built.id)
-        saves = [s for s in self.saves or () if s.folder in folders]
+        keys = bindings.saves_of(built.id)
+        saves = [s for s in self.saves or () if s.key in keys]
         if not saves:
             return True, None
         record = load_record(self._build_dir, playset.id)
@@ -2996,19 +3015,20 @@ class MainWindow(QMainWindow):
         if dropped:
             bindings.unbind(dropped)
         if choice.trash and dropped:
-            self._trash_saves(dropped, library.game.data_dir)
+            self._trash_saves(dropped)
         self._scan_saves()
 
-    def _trash_saves(self, folders: Sequence[str], data_dir: Path) -> None:
-        """Move these saves' local folders to the trash. Steam Cloud's stay."""
+    def _trash_saves(self, keys: Sequence[str]) -> None:
+        """Move these saves' local folders to the trash: in save games, or hidden.
+        Steam Cloud's stay."""
         title = "Rebuild"
         if processes.running(processes.GAME):
             self.tell(title, "Stellaris is running, so no save files were moved to the trash.")
             return
-        local = local_save_dir(data_dir)
-        failed = [
-            path for folder in folders if (path := local / folder).is_dir() and not self.trash(path)
-        ]
+        wanted = set(keys)
+        saves = (s for s in self.saves or () if s.key in wanted)
+        local = {f.path.parent for s in saves for f in s.files if not f.cloud}
+        failed = [path for path in sorted(local) if path.is_dir() and not self.trash(path)]
         if failed:
             listed = "\n".join(f"  {p}" for p in failed)
             self.tell(title, f"These couldn't be moved to the trash:\n{listed}")

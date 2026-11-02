@@ -25,7 +25,7 @@ from cold_steel.ui.help import shortcut_rows
 from cold_steel.ui.main_window import MainWindow
 from cold_steel.ui.mod_table import ALL, MOD_ROLE, NO_PLAYSET, Column
 from cold_steel.ui.rebuild_dialog import RebuildChoice
-from cold_steel.ui.saves_dialog import FOLDER_ROLE, SavesDialog
+from cold_steel.ui.saves_dialog import KEY_ROLE, SavesDialog
 from conftest import (
     SampleInstall,
     add_empire_definitions,
@@ -1306,7 +1306,7 @@ def open_saves(qtbot: QtBot, window: MainWindow) -> SavesDialog:
 
 def folders(tree: QTreeWidget) -> list[str]:
     items = (tree.topLevelItem(row) for row in range(tree.topLevelItemCount()))
-    return [item.data(0, FOLDER_ROLE) for item in items if item is not None]
+    return [item.data(0, KEY_ROLE) for item in items if item is not None]
 
 
 def row_text(item: QTreeWidgetItem | None) -> list[str]:
@@ -1684,6 +1684,77 @@ def test_play_hides_other_playsets_saves_until_the_game_closes(
     assert not (sample_install.data_dir / "cold_steel_hidden_saves").exists()
 
 
+def test_one_empire_played_in_two_playsets_keeps_both_games_apart(
+    qtbot: QtBot,
+    window: MainWindow,
+    sample_install: SampleInstall,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The game names both games' folders alike. Each playset sees its own game,
+    and nobody is asked anything (decision 129)."""
+    import subprocess
+
+    from cold_steel.paradox import processes
+
+    assert window.book is not None and window.bindings is not None
+    main, second = window.book.playsets[0], window.book.playsets[1]
+    saves = sample_install.data_dir / "save games"
+    hidden = sample_install.data_dir / "cold_steel_hidden_saves"
+    with qtbot.waitSignal(window.saves_found, timeout=10_000):
+        window._scan_saves()
+    window.bind_saves([ELVES], main.id)
+    told: list[str] = []
+    monkeypatch.setattr(window, "tell", lambda title, text: told.append(text))
+    monkeypatch.setattr(window, "confirm", lambda *args: True)  # Main has a missing mod
+
+    class Game:
+        exit_code: int | None = None
+
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            pass
+
+        def poll(self) -> int | None:
+            return self.exit_code
+
+    started: list[Game] = []
+
+    def popen(args: list[str], **kwargs: object) -> Game:
+        started.append(Game(args))
+        return started[-1]
+
+    def play_and_close(row: int, make: Callable[[], None] = lambda: None) -> None:
+        window.playset_list.setCurrentRow(row)
+        window.play_action.trigger()
+        make()  # what the game writes
+        started[-1].exit_code = 0
+        with qtbot.waitSignal(window.saves_found, timeout=10_000):
+            window._check_game()
+
+    monkeypatch.setattr(processes, "running", lambda names: names == processes.STEAM)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    window.library.game.exe.write_text("#!/bin/sh\n")  # type: ignore[union-attr]
+
+    # Second Playset starts a new game with the same empire.
+    meta = 'name="Divine Elven Order"\ndate="2204.01.02"\n'
+    play_and_close(2, lambda: make_save(saves / ELVES / "ironman.sav", meta))
+    assert told == []
+    other = f"{ELVES}~2"
+    assert window.bindings.playset_of(other) == second.id
+    assert window.bindings.playset_of(ELVES) == main.id
+    assert (saves / ELVES / "ironman.sav").is_file()  # the newer game stays in the menu
+    assert (hidden / ELVES / "2200.01.01.sav").is_file()  # the older one waits for Main
+    assert "Divine Elven Order" in window.statusBar().currentMessage()
+
+    # Main Playset: its game is back in the menu, the other one waits.
+    play_and_close(1)
+    assert (saves / ELVES / "2200.01.01.sav").is_file()
+    assert (hidden / other / "ironman.sav").is_file()
+    continue_game = (sample_install.data_dir / "continue_game.json").read_text()
+    assert f"save games/{ELVES}/" in continue_game
+    assert told == []
+    assert {s.key for s in window.saves or ()} >= {ELVES, other}
+
+
 def test_the_saves_features_are_off_while_autosaves_go_to_steam_cloud(
     qtbot: QtBot,
     window: MainWindow,
@@ -1738,7 +1809,7 @@ def test_saves_left_hidden_come_back_when_cold_steel_starts(
     from cold_steel.paradox import processes
 
     data = sample_install.data_dir
-    hide([UNE], data / "save games", hidden_dir(data), hidden_file())  # then Cold Steel crashed
+    hide([UNE], [], data / "save games", hidden_dir(data), hidden_file())  # then Cold Steel crashed
     game_running = True
     monkeypatch.setattr(
         processes, "running", lambda names: game_running and names == processes.GAME

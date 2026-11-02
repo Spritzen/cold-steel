@@ -11,9 +11,10 @@ A playset with no saves leaves the file alone. Continue also starts the game
 with `--continuelastsave`, which opens it at once, skipping the main menu.
 
 With local autosaves, both first hide saves bound to other playsets from the
-game's Load menu (core/hide.py), and make the playset's empire list the game's
-empire file (core/empires.py). When the game closes, the saves are put back and
-the empire file is copied back into the list.
+game's Load menu, bringing back the playset's own hidden ones (core/hide.py),
+and make the playset's empire list the game's empire file (core/empires.py).
+When the game closes, the saves are put back where their name is free, and the
+empire file is copied back into the list.
 """
 
 import contextlib
@@ -40,8 +41,10 @@ class PlayError(Exception):
 
 @dataclass(frozen=True)
 class HidePlan:
-    folders: tuple[str, ...]  # the saves to hide, by folder
+    away: tuple[str, ...]  # the saves to hide, by key: bound to other playsets
+    wanted: tuple[str, ...]  # the playset's own saves, by key: brought back if hidden
     record: Path  # hidden.json, the list of what's hidden
+    playset: str = ""  # the playset played, to bind the saves the game makes
 
 
 @dataclass(frozen=True)
@@ -106,10 +109,12 @@ def play(plan: PlayPlan, game: Game, backup_dir: Path) -> subprocess.Popen[bytes
     if plan.hide is not None:
         try:
             hide(
-                plan.hide.folders,
+                plan.hide.away,
+                plan.hide.wanted,
                 local_save_dir(game.data_dir),
                 hidden_dir(game.data_dir),
                 plan.hide.record,
+                plan.hide.playset,
             )
         except OSError as error:
             raise PlayError(f"Couldn't hide other playsets' saves: {error}") from error

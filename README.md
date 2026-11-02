@@ -277,7 +277,10 @@ never downloads anything. It changes Paradox's files only when you ask:
 - **Play** and **Continue**, with cloud autosaves off, move the folders of
   other playsets' saves from `save games/` to `cold_steel_hidden_saves/`
   beside it while the game runs, then move them back. No file in them
-  changes. If Cold Steel closes first, it moves them back when it next starts.
+  changes. When one empire is played in two playsets, the game gives both
+  games the same folder name. Then the other playset's game stays hidden
+  until that playset is played again, so each playset's Load menu shows
+  its own. If Cold Steel closes first, it moves them back when it next starts.
 - **Play** and **Continue**, with cloud autosaves off, replace the game's
   empire file with the playset's list of empires, and copy it back into the
   list when the game closes. Each empire is copied byte for byte. If Cold
