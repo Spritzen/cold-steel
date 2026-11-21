@@ -791,6 +791,19 @@ def test_conflicts_for_one_mod_and_after_a_change(qtbot: QtBot, clashing: MainWi
     }
 
 
+def test_refreshing_conflicts_sees_a_file_changed_since_the_last_scan(
+    qtbot: QtBot, clashing: MainWindow, sample_install: SampleInstall
+) -> None:
+    conflicts = open_conflicts(qtbot, clashing)
+    assert "Technology (1)" in groups(conflicts)
+    # My Local stops defining tech_x, with no rescan, then Refresh is pressed.
+    local = sample_install.data_dir / "mod/my_local/common/technology/a_local.txt"
+    local.write_bytes(b"tech_y = {\n\tcost = 2\n}\n")
+    with qtbot.waitSignal(clashing.conflicts_shown, timeout=20_000):
+        conflicts.refresh_requested.emit()
+    assert "Technology (1)" not in groups(conflicts)
+
+
 # Resolving conflicts
 
 
@@ -1094,6 +1107,21 @@ def test_a_rebuild_selects_the_built_playset_it_already_has(
     assert clashing.book is not None
     assert [p.name for p in clashing.book.playsets].count("Main Playset (built)") == 1
     assert clashing.selected_playset() == built
+
+
+def test_a_rebuild_copies_a_file_changed_since_the_last_scan(
+    qtbot: QtBot, clashing: MainWindow, sample_install: SampleInstall
+) -> None:
+    # Another tool rewrites a mod file after the scan that followed the first
+    # build. Nothing rescans before the second build asks for it.
+    build(qtbot, clashing)
+    clashing.playset_list.setCurrentRow(1)  # back to Main Playset
+    source = sample_install.data_dir / "mod/my_local/interface/same.gui"
+    source.write_bytes(b"guiTypes = { } # mine, changed\n")
+    record = build(qtbot, clashing)
+    assert record.copied == 1
+    folder = clashing._build_dir / record.playset
+    assert (folder / "interface/same.gui").read_bytes() == source.read_bytes()
 
 
 def test_a_playset_chosen_during_a_build_stays_selected(qtbot: QtBot, clashing: MainWindow) -> None:
