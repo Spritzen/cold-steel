@@ -732,6 +732,14 @@ class MainWindow(QMainWindow):
         task.failed.connect(self._scan_failed)
         task.finished.connect(lambda: self._task_done(task))
 
+    def _scan_in_job(self, library: Library) -> Scan:
+        """The scan, for a job to run first, so a mod file changed since the last
+        scan is seen. The window's library isn't scanned again on its own: a mod
+        written by another tool changes nothing Cold Steel watches. Without a scan,
+        `library` as it is."""
+        scan = self._scan
+        return scan if scan is not None else lambda _ctx: library
+
     def set_scan(self, scan: Scan) -> None:
         self._scan = scan
         self.rescan()
@@ -1760,16 +1768,18 @@ class MainWindow(QMainWindow):
         if self.selected_playset() is None:
             window.close()
         else:
-            self._find_conflicts()
+            self._find_conflicts(scan_first=False)  # the files didn't change
 
-    def _find_conflicts(self, mod: str | None = None) -> None:
+    def _find_conflicts(self, mod: str | None = None, *, scan_first: bool = True) -> None:
+        """Find the playset's conflicts for the Conflicts window. Opening it, or
+        its Refresh, scans the mods again first (`scan_first`)."""
         playset, library, window = self.selected_playset(), self.library, self._conflicts_window
         if playset is None or library is None or window is None:
             return
         if self._conflicts_task is not None:
             self._conflicts_task.cancel()
         window.setWindowTitle(f"Conflicts in {playset.name}")
-        task = self.tasks.start(self._playset_job(playset, library))
+        task = self.tasks.start(self._playset_job(playset, library, scan_first=scan_first))
         self._conflicts_task = task
         task.progress.connect(window.show_progress)
         task.succeeded.connect(lambda result: self._conflicts_found(result, task, mod))
@@ -1788,17 +1798,21 @@ class MainWindow(QMainWindow):
         self._show_old_copies(old)
         self.conflicts_shown.emit(found)
 
-    def _playset_job(self, playset: Playset, library: Library) -> Job[PlaysetFindings]:
+    def _playset_job(
+        self, playset: Playset, library: Library, *, scan_first: bool
+    ) -> Job[PlaysetFindings]:
         """A job finding the playset's conflicts and old copies, leaving out its patch mod
-        so the clashes it settles still show."""
+        so the clashes it settles still show. `scan_first` scans the mods again first."""
         cache, previous = self._index_cache, self._index
         leave_out = patch_keys(playset.id, self._patch_dir, library.game)
         played = as_played(playset)
-        versions = {GAME: library.game.version} | {
-            m.key: m.supported_version for m in library.every_mod
-        }
+        scan = self._scan_in_job(library) if scan_first else lambda _ctx: library
 
         def job(ctx: JobContext) -> PlaysetFindings:
+            library = scan(ctx)
+            versions = {GAME: library.game.version} | {
+                m.key: m.supported_version for m in library.every_mod
+            }
             index = Indexer(library, cache, previous)(ctx)
             found = ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
             return index, found, find_old_copies(found, versions)
@@ -1816,7 +1830,8 @@ class MainWindow(QMainWindow):
         if playset is None or library is None:
             self._show_old_copies(())
             return
-        task = self.tasks.start(self._playset_job(playset, library))
+        # Run after each scan and each playset change, so the last scan is fresh enough.
+        task = self.tasks.start(self._playset_job(playset, library, scan_first=False))
         self._old_task = task
         task.succeeded.connect(lambda result: self._old_copies_found(result, task))
         task.failed.connect(
@@ -1873,10 +1888,10 @@ class MainWindow(QMainWindow):
         resolutions = choices.resolutions  # a snapshot; the job runs on another thread
         cache, previous, root = self._index_cache, self._index, self._patch_dir
         leave_out = patch_keys(playset.id, root, library.game)
-
-        played = as_played(playset)
+        scan, played = self._scan_in_job(library), as_played(playset)
 
         def job(ctx: JobContext) -> PatchPlan:
+            library = scan(ctx)
             index = Indexer(library, cache, previous)(ctx)
             found = ConflictFinder(index, played, library, leave_out=leave_out)(ctx)
             ctx.progress(0, 0, "Writing the patch mod")
@@ -2907,10 +2922,13 @@ class MainWindow(QMainWindow):
         go, rebuild = self._ask_about_saves(playset)
         if not go:
             return
-        builder = Builder(
-            library, as_played(playset), self._index_cache, self._build_dir, self._index
-        )
-        task = self.tasks.start(builder)
+        scan, played = self._scan_in_job(library), as_played(playset)
+        cache, root, previous = self._index_cache, self._build_dir, self._index
+
+        def job(ctx: JobContext) -> tuple[BuildRecord, Index]:
+            return Builder(scan(ctx), played, cache, root, previous)(ctx)
+
+        task = self.tasks.start(job)
         self._build_task = task
         self._rebuild = rebuild
         task.progress.connect(self._show_progress)

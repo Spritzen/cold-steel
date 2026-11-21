@@ -349,6 +349,10 @@ class Builder:
 
     `playset` is the playset as played (playsets.as_played), with its patch
     mod. `previous` is the last index this window built, as for Indexer.
+
+    `library` must come from a scan made just before. The build trusts its file
+    stamps and never looks in the mods' folders itself, so a file changed since
+    that scan isn't copied.
     """
 
     library: Library
